@@ -1,0 +1,584 @@
+"""
+Definition of views.
+"""
+
+import time
+from datetime import datetime
+from django.shortcuts import render, redirect, get_object_or_404
+from django.http import HttpRequest, JsonResponse
+from django.urls import reverse
+from django.utils.http import urlencode
+from django.views.decorators.http import require_POST
+from django.contrib.auth.decorators import user_passes_test
+from django.contrib.auth.models import User
+from kiteconnect import KiteConnect
+from kiteconnect.exceptions import KiteException, TokenException
+from app.forms import AddUserForm, ManageZkUserForm
+from app.models import KiteUser, Profile
+
+# Per-process cache of instruments per exchange: {exchange: (timestamp, list)}.
+_INSTRUMENTS_CACHE = {}
+_INSTRUMENTS_TTL = 60 * 60  # 1 hour
+
+# Add/Delete user management is restricted to superusers.
+superuser_required = user_passes_test(lambda u: u.is_superuser, login_url='login')
+
+
+def is_admin(user):
+    """True if the user is an admin_only role holder or a superuser."""
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'profile', None)
+    return bool(profile and profile.role == 'admin_only')
+
+
+def can_trade_all(user):
+    """True if the user may view/act on ALL accounts on the trade dashboard.
+
+    Superusers, admin_only and trader_all roles all manage every account's
+    trading; only self_only is restricted to their own accounts.
+    """
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'profile', None)
+    return bool(profile and profile.role in ('admin_only', 'trader_all'))
+
+
+def can_configure_accounts(user):
+    """True if the user may add/modify/delete app accounts.
+
+    Everyone except the trade-only role (trader_all) can configure accounts;
+    self_only manages just their own, admins manage all.
+    """
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'profile', None)
+    return not (profile and profile.role == 'trader_all')
+
+
+# Managing app login users is restricted to admin_only role holders / superusers.
+admin_required = user_passes_test(is_admin, login_url='login')
+
+# Configuring accounts (add/re-auth/delete) is blocked for the trade-only role.
+account_config_required = user_passes_test(can_configure_accounts, login_url='login')
+
+def home(request):
+    """Renders the home page."""
+    assert isinstance(request, HttpRequest)
+    return render(
+        request,
+        'app/index.html',
+        {
+            'title':'Home Page',
+            'year':datetime.now().year,
+        }
+    )
+
+def contact(request):
+    """Renders the contact page."""
+    assert isinstance(request, HttpRequest)
+    return render(
+        request,
+        'app/contact.html',
+        {
+            'title':'Contact',
+            'message':'Your contact page.',
+            'year':datetime.now().year,
+        }
+    )
+
+def about(request):
+    """Renders the about page."""
+    assert isinstance(request, HttpRequest)
+    return render(
+        request,
+        'app/about.html',
+        {
+            'title':'About',
+            'message':'Your application description page.',
+            'year':datetime.now().year,
+        }
+    )
+
+
+def _make_kite(api_key, access_token=None):
+    """Creates a KiteConnect client, optionally with an access token set."""
+    kite = KiteConnect(api_key=api_key)
+    if access_token:
+        kite.set_access_token(access_token)
+    return kite
+
+
+def _auth_status(user):
+    """Probes the stored token: 'active', 'expired' (token invalid), or 'error'."""
+    if not user.access_token:
+        return 'none'
+    try:
+        _make_kite(user.api_key, user.access_token).profile()
+        return 'active'
+    except TokenException:
+        # Kite returns 403 when the access token is invalid/expired.
+        # Manual-token users are not auto-reauthenticated; flag distinctly.
+        return 'expired_manual' if user.manual_token else 'expired'
+    except KiteException:
+        return 'error'
+
+
+def _status_presentation(status):
+    """Maps an auth status to a simple label + Bootstrap CSS class.
+
+    Per spec, the token is shown either as 'Active' or
+    'Needs reauthentication' wherever a live status is displayed.
+    """
+    if status == 'active':
+        return {'label': 'Active', 'css': 'label-success'}
+    return {'label': 'Needs reauthentication', 'css': 'label-danger'}
+
+
+def _user_rows(request_user, owner_filter=''):
+    """Builds stored users (scoped by role) with their auth status.
+
+    Users who can trade all accounts may pass owner_filter (an owner username)
+    to view a single user's accounts; self_only is restricted to their own.
+    """
+    qs = KiteUser.objects.select_related('owner').order_by('user_name', 'api_key')
+    if can_trade_all(request_user):
+        if owner_filter:
+            qs = qs.filter(owner__username=owner_filter)
+    else:
+        qs = qs.filter(owner=request_user)
+    rows = []
+    for u in qs:
+        status = _auth_status(u)
+        rows.append({
+            'user': u,
+            'status': status,
+            'presentation': _status_presentation(status),
+        })
+    return rows
+
+
+@admin_required
+def managezkusers(request):
+    """Admin-only: provision app login users and inspect all Kite accounts."""
+    assert isinstance(request, HttpRequest)
+    if request.method == 'POST':
+        form = ManageZkUserForm(request.POST)
+        if form.is_valid():
+            new_user = User.objects.create_user(
+                username=form.cleaned_data['username'],
+                password=form.cleaned_data['password'],
+            )
+            # The ensure_profile signal already made a default self_only profile.
+            profile = new_user.profile
+            profile.role = form.cleaned_data['role']
+            profile.save()
+            return redirect('managezkusers')
+    else:
+        form = ManageZkUserForm()
+
+    # All Kite accounts (admins see everyone) with live token status.
+    rows = _user_rows(request.user)
+    # Every app login user with their role (including those with no accounts).
+    role_labels = dict(Profile.ROLE_CHOICES)
+    app_users = []
+    for u in User.objects.order_by('username'):
+        profile = getattr(u, 'profile', None)
+        role = getattr(profile, 'role', Profile.SELF_ONLY)
+        if u.is_superuser:
+            label, is_admin_user = 'Admin', True
+        else:
+            label = role_labels.get(role, 'Self only')
+            is_admin_user = role == Profile.ADMIN_ONLY
+        app_users.append({
+            'user': u,
+            'role_label': label,
+            'is_admin': is_admin_user,
+            'is_trader_all': role == Profile.TRADER_ALL,
+        })
+    return render(request, 'app/managezkusers.html', {
+        'title': 'Manage ZK Users',
+        'year': datetime.now().year,
+        'form': form,
+        'rows': rows,
+        'app_users': app_users,
+    })
+
+
+def token_statuses(request):
+    """JSON: live token status per api_key, scoped to the requesting user.
+
+    Polled by /configurezkauth, /trade and /deleteuser to refresh the displayed
+    access-token status from the live Zerodha API every 60 seconds.
+    """
+    owner_filter = request.GET.get('owner', '') if can_trade_all(request.user) else ''
+    statuses = {}
+    for row in _user_rows(request.user, owner_filter):
+        statuses[row['user'].api_key] = {
+            'status': row['status'],
+            'label': row['presentation']['label'],
+            'css': row['presentation']['css'],
+        }
+    return JsonResponse({'statuses': statuses})
+
+
+def _owner_choices():
+    """App login users owning at least one Kite account (admin owner dropdowns)."""
+    return User.objects.filter(kite_users__isnull=False).distinct().order_by('username')
+
+
+@account_config_required
+def configurezkauth(request):
+    """Lists stored users with auth status; adds or re-authenticates a user."""
+    assert isinstance(request, HttpRequest)
+
+    # Re-authenticate an existing user using credentials stored in the DB.
+    reauth_key = request.GET.get('reauth')
+    if reauth_key:
+        user = get_object_or_404(KiteUser, api_key=reauth_key)
+        if not is_admin(request.user) and user.owner_id != request.user.id:
+            return redirect('configurezkauth')
+        if user.manual_token:
+            # Direct bearer-token users are never auto-reauthenticated.
+            return redirect('configurezkauth')
+        request.session['pending_api_key'] = user.api_key
+        return redirect(_make_kite(user.api_key).login_url())
+
+    if request.method == 'POST':
+        form = AddUserForm(request.POST)
+        if form.is_valid():
+            api_key = form.cleaned_data['api_key']
+            if form.cleaned_data['method'] == 'bearer':
+                token = form.cleaned_data['access_token']
+                user, _ = KiteUser.objects.update_or_create(
+                    api_key=api_key,
+                    defaults={'access_token': token, 'manual_token': True, 'api_secret': '', 'owner': request.user},
+                )
+                try:
+                    prof = _make_kite(api_key, token).profile()
+                    user.user_id = prof.get('user_id', '')
+                    user.user_name = prof.get('user_name', '')
+                    user.email = prof.get('email', '')
+                    user.save()
+                    msg, ok = 'Bearer token accepted for {0}.'.format(user.user_name or api_key), True
+                except KiteException as ex:
+                    msg, ok = 'Bearer token invalid: {0}'.format(ex), False
+                return render(request, 'app/adduser.html', {
+                    'title': 'Configure ZK Auth', 'year': datetime.now().year,
+                    'form': AddUserForm(), 'result': True, 'success': ok, 'message': msg,
+                })
+            # OAuth flow: save key/secret then redirect to Kite login.
+            KiteUser.objects.update_or_create(
+                api_key=api_key,
+                defaults={'api_secret': form.cleaned_data['api_secret'], 'manual_token': False, 'owner': request.user},
+            )
+            request.session['pending_api_key'] = api_key
+            kite = _make_kite(api_key)
+            return redirect(kite.login_url())
+    else:
+        form = AddUserForm()
+    owner_filter = request.GET.get('owner', '') if is_admin(request.user) else ''
+    return render(
+        request,
+        'app/adduser.html',
+        {
+            'title': 'Configure ZK Auth',
+            'year': datetime.now().year,
+            'form': form,
+            'rows': _user_rows(request.user, owner_filter),
+            'is_admin': is_admin(request.user),
+            'owners': _owner_choices() if is_admin(request.user) else [],
+            'owner_filter': owner_filter,
+            'redirect_url': request.build_absolute_uri(reverse('kite_callback')),
+        }
+    )
+
+
+def kite_callback(request):
+    """Handles the Kite redirect, exchanges request_token for an access_token."""
+    assert isinstance(request, HttpRequest)
+    request_token = request.GET.get('request_token')
+    status = request.GET.get('status')
+    api_key = request.session.pop('pending_api_key', None) or request.GET.get('api_key')
+
+    success, message = False, 'Authentication failed.'
+    if status and status != 'success':
+        message = 'Kite login was not successful: {0}'.format(status)
+    elif not request_token:
+        message = 'Missing request_token in redirect.'
+    elif not api_key:
+        message = 'No pending user to authenticate. Start from Configure ZK Auth.'
+    else:
+        try:
+            user = KiteUser.objects.get(api_key=api_key)
+            kite = _make_kite(user.api_key)
+            data = kite.generate_session(request_token, api_secret=user.api_secret)
+            user.access_token = data['access_token']
+            user.user_id = data.get('user_id', '')
+            user.user_name = data.get('user_name', '')
+            user.email = data.get('email', '')
+            user.save()
+            success = True
+            message = 'Authentication succeeded for {0}.'.format(user.user_name or user.user_id)
+        except KiteUser.DoesNotExist:
+            message = 'No stored user for that API key.'
+        except KiteException as ex:
+            message = 'Authentication failed: {0}'.format(ex)
+
+    return render(
+        request,
+        'app/adduser.html',
+        {
+            'title': 'Configure ZK Auth',
+            'year': datetime.now().year,
+            'form': AddUserForm(),
+            'result': True,
+            'success': success,
+            'message': message,
+        }
+    )
+
+
+def trade(request):
+    """Shows trading data for a selected authenticated user."""
+    assert isinstance(request, HttpRequest)
+    trade_all = can_trade_all(request.user)
+    users = KiteUser.objects.exclude(access_token='').select_related('owner').order_by('user_name')
+    if not trade_all:
+        users = users.filter(owner=request.user)
+    selected = request.GET.get('api_key', '')
+    context = {
+        'title': 'Trade',
+        'year': datetime.now().year,
+        'users': users,
+        'selected': selected,
+        'banner': request.GET.get('msg', ''),
+        'banner_level': 'success' if request.GET.get('level') == 'success' else 'danger',
+    }
+    if selected:
+        user = get_object_or_404(KiteUser, api_key=selected)
+        if not trade_all and user.owner_id != request.user.id:
+            context['error'] = 'Not authorized for this account.'
+            return render(request, 'app/trade.html', context)
+        context['selected_status'] = _status_presentation(_auth_status(user))
+        kite = _make_kite(user.api_key, user.access_token)
+        try:
+            profile = kite.profile()
+            orders = kite.orders()
+            margins = kite.margins()
+            holdings = kite.holdings()
+            positions = kite.positions().get('net', [])
+            context.update({
+                'profile': profile,
+                'open_orders': [o for o in orders if o.get('status') == 'OPEN'],
+                'executed_orders': [o for o in orders if o.get('status') == 'COMPLETE'],
+                'cancelled_orders': [o for o in orders if o.get('status') == 'CANCELLED'],
+                'holdings': holdings,
+                'positions': positions,
+                'holdings_pnl': sum(h.get('pnl', 0) for h in holdings),
+                'positions_pnl': sum(p.get('pnl', 0) for p in positions),
+                'balance': margins.get('equity', {}).get('available', {}).get('live_balance'),
+                'margin': margins.get('equity', {}).get('net'),
+            })
+        except KiteException as ex:
+            context['error'] = 'Could not load data (token may be expired): {0}'.format(ex)
+    return render(request, 'app/trade.html', context)
+
+
+@account_config_required
+def deleteuser(request):
+    """Lists stored users and deletes the selected one (this app's DB only)."""
+    assert isinstance(request, HttpRequest)
+    admin = is_admin(request.user)
+    if request.method == 'POST':
+        qs = KiteUser.objects.all()
+        if not admin:
+            qs = qs.filter(owner=request.user)
+        qs.filter(api_key=request.POST.get('api_key', '')).delete()
+        return redirect('deleteuser')
+    owner_filter = request.GET.get('owner', '') if admin else ''
+    return render(
+        request,
+        'app/deleteuser.html',
+        {
+            'title': 'Delete User',
+            'year': datetime.now().year,
+            'rows': _user_rows(request.user, owner_filter),
+            'is_admin': admin,
+            'owners': _owner_choices() if admin else [],
+            'owner_filter': owner_filter,
+        }
+    )
+
+
+def _user_kite(api_key, request_user=None):
+    """Returns a token-set Kite client for the stored user, or None.
+
+    When request_user is given, enforces ownership unless they can trade all.
+    """
+    qs = KiteUser.objects.filter(api_key=api_key).exclude(access_token='')
+    if request_user is not None and not can_trade_all(request_user):
+        qs = qs.filter(owner=request_user)
+    user = qs.first()
+    if not user:
+        return None
+    return _make_kite(user.api_key, user.access_token)
+
+
+def _trade_redirect(api_key, level, message):
+    """Redirects to /trade preserving the user and a status banner."""
+    qs = urlencode({'api_key': api_key, 'level': level, 'msg': message})
+    return redirect('{0}?{1}'.format(reverse('trade'), qs))
+
+
+def _get_instruments(kite, exchange):
+    """Returns cached instruments for an exchange (refreshed hourly)."""
+    cached = _INSTRUMENTS_CACHE.get(exchange)
+    if cached and (time.time() - cached[0]) < _INSTRUMENTS_TTL:
+        return cached[1]
+    data = kite.instruments(exchange)
+    _INSTRUMENTS_CACHE[exchange] = (time.time(), data)
+    return data
+
+
+def instruments_search(request):
+    """JSON: best-match tradingsymbols for a query on an exchange."""
+    kite = _user_kite(request.GET.get('api_key', ''), request.user)
+    if not kite:
+        return JsonResponse({'results': []})
+    query = request.GET.get('q', '').upper()
+    exchange = request.GET.get('exchange', 'NSE')
+    results = []
+    if query:
+        for inst in _get_instruments(kite, exchange):
+            sym = inst.get('tradingsymbol', '')
+            if query in sym:
+                results.append({'symbol': sym, 'name': inst.get('name', '')})
+                if len(results) >= 20:
+                    break
+    return JsonResponse({'results': results})
+
+
+def instruments_all(request):
+    """JSON: full NSE+BSE symbol list for client-side autocomplete (cached)."""
+    kite = _user_kite(request.GET.get('api_key', ''), request.user)
+    if not kite:
+        return JsonResponse({'results': []})
+    out = []
+    for exch in ('NSE', 'BSE'):
+        for inst in _get_instruments(kite, exch):
+            out.append({'symbol': inst.get('tradingsymbol', ''),
+                        'name': inst.get('name', ''),
+                        'exchange': exch})
+    return JsonResponse({'results': out})
+
+
+def quote(request):
+    """JSON: last price and upper/lower circuit for an exchange:symbol."""
+    kite = _user_kite(request.GET.get('api_key', ''), request.user)
+    symbol = request.GET.get('symbol', '')
+    exchange = request.GET.get('exchange', 'NSE')
+    if not kite or not symbol:
+        return JsonResponse({'ok': False})
+    key = '{0}:{1}'.format(exchange, symbol)
+    try:
+        data = kite.quote(key).get(key, {})
+    except KiteException as ex:
+        return JsonResponse({'ok': False, 'error': str(ex)})
+    circuit = data.get('circuit_limit', {}) or {}
+    return JsonResponse({
+        'ok': True,
+        'last_price': data.get('last_price'),
+        'lower': circuit.get('lower'),
+        'upper': circuit.get('upper'),
+    })
+
+
+def _validate_circuit(kite, exchange, symbol, order_type, price):
+    """For LIMIT orders, ensure price is within the day's circuit band."""
+    if order_type != KiteConnect.ORDER_TYPE_LIMIT:
+        return None
+    key = '{0}:{1}'.format(exchange, symbol)
+    try:
+        band = kite.quote(key).get(key, {}).get('circuit_limit', {}) or {}
+    except KiteException:
+        return None
+    lower, upper = band.get('lower'), band.get('upper')
+    if lower is not None and upper is not None and not (lower <= price <= upper):
+        return 'Price {0} is outside circuit band {1}-{2}.'.format(price, lower, upper)
+    return None
+
+
+def _place(kite, p):
+    """Places a regular order from a dict of POST params; returns order_id."""
+    order_type = p.get('order_type', 'MARKET')
+    price = float(p['price']) if p.get('price') else None
+    err = _validate_circuit(kite, p['exchange'], p['tradingsymbol'], order_type, price)
+    if err:
+        raise ValueError(err)
+    return kite.place_order(
+        variety=KiteConnect.VARIETY_REGULAR,
+        exchange=p['exchange'],
+        tradingsymbol=p['tradingsymbol'],
+        transaction_type=p['transaction_type'],
+        quantity=int(p['quantity']),
+        product=p.get('product', 'CNC'),
+        order_type=order_type,
+        price=price,
+        validity=KiteConnect.VALIDITY_DAY,
+    )
+
+
+@require_POST
+def trade_place(request):
+    """Places a new order for the selected user."""
+    api_key = request.POST.get('api_key', '')
+    kite = _user_kite(api_key, request.user)
+    if not kite:
+        return _trade_redirect(api_key, 'error', 'No authenticated user selected.')
+    try:
+        order_id = _place(kite, request.POST)
+        return _trade_redirect(api_key, 'success', 'Order placed (ID {0}).'.format(order_id))
+    except (KiteException, ValueError, KeyError) as ex:
+        return _trade_redirect(api_key, 'error', 'Place failed: {0}'.format(ex))
+
+
+@require_POST
+def trade_cancel(request):
+    """Cancels an open order."""
+    api_key = request.POST.get('api_key', '')
+    kite = _user_kite(api_key, request.user)
+    if not kite:
+        return _trade_redirect(api_key, 'error', 'No authenticated user selected.')
+    try:
+        kite.cancel_order(variety=KiteConnect.VARIETY_REGULAR,
+                          order_id=request.POST.get('order_id'))
+        return _trade_redirect(api_key, 'success', 'Order cancelled.')
+    except KiteException as ex:
+        return _trade_redirect(api_key, 'error', 'Cancel failed: {0}'.format(ex))
+
+
+@require_POST
+def trade_modify(request):
+    """Modifies an open order; exchange change = cancel and re-place."""
+    p = request.POST
+    api_key = p.get('api_key', '')
+    kite = _user_kite(api_key, request.user)
+    if not kite:
+        return _trade_redirect(api_key, 'error', 'No authenticated user selected.')
+    try:
+        if p.get('new_exchange') and p.get('new_exchange') != p.get('exchange'):
+            kite.cancel_order(variety=KiteConnect.VARIETY_REGULAR, order_id=p.get('order_id'))
+            _place(kite, {**p.dict(), 'exchange': p.get('new_exchange')})
+            return _trade_redirect(api_key, 'success', 'Order cancelled and re-placed on new exchange.')
+        kite.modify_order(
+            variety=KiteConnect.VARIETY_REGULAR,
+            order_id=p.get('order_id'),
+            quantity=int(p['quantity']),
+            price=float(p['price']) if p.get('price') else None,
+            order_type=p.get('order_type'),
+        )
+        return _trade_redirect(api_key, 'success', 'Order modified.')
+    except (KiteException, ValueError, KeyError) as ex:
+        return _trade_redirect(api_key, 'error', 'Modify failed: {0}'.format(ex))
+

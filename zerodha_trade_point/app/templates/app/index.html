@@ -1,0 +1,59 @@
+{% extends "app/layout.html" %}
+
+{% block content %}
+
+<div class="jumbotron" style="background:#0b3d4d;color:#fff;border-radius:8px;">
+    <h1>ZK Trade Point</h1>
+    <p class="lead">Manage multiple Zerodha Kite accounts, monitor live positions, and place orders from one dashboard.</p>
+    <p><a href="{% url 'trade' %}" class="btn btn-success btn-lg">Open Trade Dashboard &raquo;</a></p>
+</div>
+
+<div class="row">
+    {% if app_can_configure %}
+    <div class="col-md-4">
+        <div class="panel panel-primary">
+            <div class="panel-heading"><h3 class="panel-title">Configure ZK Auth</h3></div>
+            <div class="panel-body">
+                <p>Connect an account with API key &amp; secret or a bearer token.</p>
+                <a href="{% url 'configurezkauth' %}" class="btn btn-primary btn-block">Configure ZK Auth</a>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    <div class="col-md-4">
+        <div class="panel panel-success">
+            <div class="panel-heading"><h3 class="panel-title">Trade</h3></div>
+            <div class="panel-body">
+                <p>View holdings, positions, orders and place/modify trades.</p>
+                <a href="{% url 'trade' %}" class="btn btn-success btn-block">Trade</a>
+            </div>
+        </div>
+    </div>
+    {% if app_can_configure %}
+    <div class="col-md-4">
+        <div class="panel panel-danger">
+            <div class="panel-heading"><h3 class="panel-title">Delete User</h3></div>
+            <div class="panel-body">
+                <p>Remove a stored account and its credentials.</p>
+                <a href="{% url 'deleteuser' %}" class="btn btn-danger btn-block">Delete User</a>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+{% if app_is_admin %}
+<div class="row">
+    <div class="col-md-4">
+        <div class="panel panel-warning">
+            <div class="panel-heading"><h3 class="panel-title">Manage Users</h3></div>
+            <div class="panel-body">
+                <p>Create app login users, assign roles, and inspect all accounts.</p>
+                <a href="{% url 'managezkusers' %}" class="btn btn-warning btn-block">Manage Users</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

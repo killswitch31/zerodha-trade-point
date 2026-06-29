@@ -1,0 +1,48 @@
+{% extends "app/layout.html" %}
+
+{% block content %}
+
+<h2>{{ title }}</h2>
+
+{% if is_admin %}
+<form action="" method="get" class="form-inline" style="margin-bottom:15px;">
+    <label>Show accounts for:
+        <select name="owner" class="form-control" onchange="this.form.submit()">
+            <option value="">-- All users --</option>
+            {% for o in owners %}
+            <option value="{{ o.username }}" {% if o.username == owner_filter %}selected{% endif %}>{{ o.username }}</option>
+            {% endfor %}
+        </select>
+    </label>
+</form>
+{% endif %}
+
+<table class="table">
+    <thead><tr><th>App user</th><th>Zerodha user</th><th>User ID</th><th>API key</th><th>Token status</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+        <tr>
+            <td>{{ r.user.owner.username|default:"-" }}</td>
+            <td>{{ r.user.user_name }}</td>
+            <td>{{ r.user.user_id }}</td>
+            <td>{{ r.user.api_key }}</td>
+            <td data-token-key="{{ r.user.api_key }}">
+                <span class="label {{ r.presentation.css }}">{{ r.presentation.label }}</span>
+            </td>
+            <td>
+                <form action="" method="post" onsubmit="return confirm('Delete from this app only?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="api_key" value="{{ r.user.api_key }}" />
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
+            </td>
+        </tr>
+    {% empty %}
+        <tr><td colspan="6">No stored users.</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+<a href="{% url 'home' %}" class="btn btn-default">Home</a>
+
+{% endblock %}

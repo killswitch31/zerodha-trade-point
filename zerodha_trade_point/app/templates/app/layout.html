@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - ZK Trade Point</title>
+    {% load static %}
+    <link rel="stylesheet" type="text/css" href="{% static 'app/content/bootstrap.min.css' %}" />
+    <link rel="stylesheet" type="text/css" href="{% static 'app/content/site.css' %}" />
+    <style>
+        .navbar-inverse { background:#0b3d4d; border-color:#072c38; }
+        .navbar-inverse .navbar-brand { color:#fff; font-weight:bold; letter-spacing:.5px; }
+        .navbar-inverse .navbar-nav > li > a { color:#cfe8ef; }
+        .navbar-inverse .navbar-nav > li > a:hover { color:#fff; }
+        .navbar-brand .glyphicon { color:#5bc0a6; margin-right:6px; }
+    </style>
+    <script src="{% static 'app/scripts/modernizr-2.6.2.js' %}"></script>
+</head>
+
+<body>
+    <div class="navbar navbar-inverse navbar-fixed-top">
+        <div class="container">
+            <div class="navbar-header">
+                <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                </button>
+                <a href="/" class="navbar-brand"><span class="glyphicon glyphicon-stats"></span>ZK Trade Point</a>
+            </div>
+            <div class="navbar-collapse collapse">
+                <ul class="nav navbar-nav">
+                    <li><a href="{% url 'home' %}">Home</a></li>
+                    <li><a href="{% url 'about' %}">About</a></li>
+                    <li><a href="{% url 'contact' %}">Contact</a></li>
+                    {% if app_is_admin %}<li><a href="{% url 'managezkusers' %}">Manage Users</a></li>{% endif %}
+                </ul>
+                {% include 'app/loginpartial.html' %}
+            </div>
+        </div>
+    </div>
+
+    <div class="container body-content">
+{% block content %}{% endblock %}
+        <hr/>
+        <footer>
+            <p>&copy; {{ year }} - ZK Trade Point</p>
+        </footer>
+    </div>
+
+    <script src="{% static 'app/scripts/jquery-1.10.2.js' %}"></script>
+    <script src="{% static 'app/scripts/bootstrap.js' %}"></script>
+    <script src="{% static 'app/scripts/respond.js' %}"></script>
+    {% if user.is_authenticated %}
+    <script>
+        // Shared live token-status polling: refreshes every [data-token-key]
+        // cell from the live Zerodha API every 60 seconds.
+        (function () {
+            var cells = document.querySelectorAll('[data-token-key]');
+            if (!cells.length) { return; }
+            var owner = new URLSearchParams(window.location.search).get('owner') || '';
+            var url = '{% url 'token_statuses' %}' + (owner ? ('?owner=' + encodeURIComponent(owner)) : '');
+            function poll() {
+                fetch(url)
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        var statuses = data.statuses || {};
+                        document.querySelectorAll('[data-token-key]').forEach(function (cell) {
+                            var info = statuses[cell.getAttribute('data-token-key')];
+                            if (!info) { return; }
+                            var badge = cell.querySelector('.label');
+                            if (!badge) { return; }
+                            badge.className = 'label ' + info.css;
+                            badge.textContent = info.label;
+                        });
+                    })
+                    .catch(function () { /* ignore transient errors */ });
+            }
+            setInterval(poll, 60000);
+        })();
+    </script>
+    {% endif %}
+{% block scripts %}{% endblock %}
+
+</body>
+</html>

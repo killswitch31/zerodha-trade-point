@@ -1,0 +1,355 @@
+{% extends "app/layout.html" %}
+
+{% block content %}
+
+<h2>{{ title }}</h2>
+
+<form action="" method="get" class="form-inline">
+    <select name="api_key" class="form-control" onchange="this.form.submit()">
+        <option value="">-- Select Zerodha user --</option>
+        {% for u in users %}
+        <option value="{{ u.api_key }}" {% if u.api_key == selected %}selected{% endif %}>{{ u.user_name }} ({{ u.user_id }})</option>
+        {% endfor %}
+    </select>
+    {% if selected_status %}
+    <span data-token-key="{{ selected }}" style="margin-left:10px;">
+        <span class="label {{ selected_status.css }}">{{ selected_status.label }}</span>
+    </span>
+    {% endif %}
+    <label style="margin-left:15px;">Refresh:
+        <select id="refreshInterval" class="form-control">
+            <option value="0">Off</option>
+            <option value="15">15s</option>
+            <option value="30">30s</option>
+            <option value="60">60s</option>
+        </select>
+    </label>
+    <button type="button" id="refreshNow" class="btn btn-primary" style="margin-left:10px;">Refresh now</button>
+    <span id="countdown" class="text-muted" style="margin-left:10px;"></span>
+</form>
+
+{% if banner or error %}
+<div class="modal fade" id="msgModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">{% if banner_level == 'success' %}Success{% else %}Error{% endif %}</h4>
+            </div>
+            <div class="modal-body"><p>{{ banner }}{{ error }}</p></div>
+            <div class="modal-footer"><button type="button" class="btn btn-primary" data-dismiss="modal">OK</button></div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if profile %}
+<hr/>
+<h3>{{ profile.user_name }} &mdash; {{ profile.email }}</h3>
+<div class="row">
+    <div class="col-md-6"><strong>Balance available:</strong> {{ balance }}</div>
+    <div class="col-md-6"><strong>Margin available:</strong> {{ margin }}</div>
+</div>
+
+<h4>Place order</h4>
+<div id="placePanel" class="panel panel-default" style="max-width:420px;">
+    <div class="panel-body">
+        <form id="placeForm" method="post" action="{% url 'trade_place' %}">
+            {% csrf_token %}
+            <input type="hidden" name="api_key" value="{{ selected }}" />
+            <input type="hidden" name="transaction_type" id="po_side" value="BUY" />
+            <div class="form-group">
+                <div class="btn-group btn-group-justified" data-toggle="buttons">
+                    <label class="btn btn-success active" id="po_buy"><input type="radio" autocomplete="off" checked> BUY</label>
+                    <label class="btn btn-default" id="po_sell"><input type="radio" autocomplete="off"> SELL</label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Exchange</label>
+                <select name="exchange" id="po_exchange" class="form-control">
+                    <option value="NSE" selected>NSE</option>
+                    <option value="BSE">BSE</option>
+                </select>
+            </div>
+            <div class="form-group" style="position:relative;">
+                <label>Security</label>
+                <input name="tradingsymbol" id="po_symbol" class="form-control" placeholder="Type symbol or company name" autocomplete="off" />
+                <ul id="po_suggest" class="list-group" style="position:absolute;z-index:10;width:100%;max-height:240px;overflow:auto;display:none;"></ul>
+            </div>
+            <div class="form-group"><label>Quantity</label><input name="quantity" type="number" min="1" value="1" class="form-control" /></div>
+            <div class="form-group"><label>Product</label><select name="product" class="form-control"><option selected>CNC</option><option>MIS</option></select></div>
+            <div class="form-group"><label>Order type</label><select name="order_type" id="po_type" class="form-control"><option>MARKET</option><option>LIMIT</option></select></div>
+            <div class="form-group"><label>Price</label><input name="price" id="po_price" type="number" step="0.05" class="form-control" placeholder="Price" disabled /><span id="po_band" class="text-muted"></span></div>
+            <button type="submit" id="po_submit" class="btn btn-success btn-block">Buy</button>
+        </form>
+    </div>
+</div>
+
+<form id="modifyForm" method="post" action="{% url 'trade_modify' %}" class="form-inline" style="display:none;">
+    {% csrf_token %}
+    <input type="hidden" name="api_key" value="{{ selected }}" />
+    <input type="hidden" name="order_id" id="mo_id" />
+    <input type="hidden" name="exchange" id="mo_exchange" />
+    <input type="hidden" name="tradingsymbol" id="mo_symbol" />
+    <input type="hidden" name="transaction_type" id="mo_side" />
+    <input type="hidden" name="product" id="mo_product" />
+    <strong>Modify <span id="mo_label"></span>:</strong>
+    <select name="new_exchange" id="mo_newex" class="form-control"><option>NSE</option><option>BSE</option></select>
+    <input name="quantity" id="mo_qty" type="number" min="1" class="form-control" style="width:80px;" />
+    <select name="order_type" id="mo_type" class="form-control"><option>MARKET</option><option>LIMIT</option></select>
+    <input name="price" id="mo_price" type="number" step="0.05" class="form-control" style="width:110px;" />
+    <button type="submit" class="btn btn-warning">Save</button>
+</form>
+
+<h4>Open orders ({{ open_orders|length }})</h4>
+<table class="table table-condensed">
+    <thead><tr><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Product</th><th>Order type</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for o in open_orders %}
+        <tr>
+            <td>{{ o.order_id }}</td>
+            <td>{{ o.tradingsymbol }}</td>
+            <td class="{% if o.transaction_type == 'BUY' %}text-success{% else %}text-danger{% endif %}">{{ o.transaction_type }}</td>
+            <td>{{ o.quantity }}</td>
+            <td>{{ o.order_timestamp }}</td>
+            <td>{{ o.exchange }}</td>
+            <td>{{ o.price }}</td>
+            <td>{{ o.product }}</td>
+            <td>{{ o.order_type }}</td>
+            <td>
+                <button type="button" class="btn btn-warning btn-sm" onclick="modifyOrder(this)" data-id="{{ o.order_id }}" data-ex="{{ o.exchange }}" data-sym="{{ o.tradingsymbol }}" data-side="{{ o.transaction_type }}" data-qty="{{ o.quantity }}" data-type="{{ o.order_type }}" data-price="{{ o.price }}" data-product="{{ o.product }}">Modify</button>
+                <form method="post" action="{% url 'trade_cancel' %}" style="display:inline;" onsubmit="return confirm('Cancel order?');">{% csrf_token %}<input type="hidden" name="api_key" value="{{ selected }}"/><input type="hidden" name="order_id" value="{{ o.order_id }}"/><button class="btn btn-danger btn-sm">Cancel</button></form>
+            </td>
+        </tr>
+    {% empty %}<tr><td colspan="10">None</td></tr>{% endfor %}
+    </tbody>
+</table>
+
+<h4>Executed orders ({{ executed_orders|length }})</h4>
+<table class="table table-condensed">
+    <thead><tr><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Product</th><th>Order type</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for o in executed_orders %}
+        <tr>
+            <td>{{ o.order_id }}</td>
+            <td>{{ o.tradingsymbol }}</td>
+            <td class="{% if o.transaction_type == 'BUY' %}text-success{% else %}text-danger{% endif %}">{{ o.transaction_type }}</td>
+            <td>{{ o.quantity }}</td>
+            <td>{{ o.order_timestamp }}</td>
+            <td>{{ o.exchange }}</td>
+            <td>{{ o.price }}</td>
+            <td>{{ o.product }}</td>
+            <td>{{ o.order_type }}</td>
+            <td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="{{ o.exchange }}" data-sym="{{ o.tradingsymbol }}" data-side="{{ o.transaction_type }}" data-qty="{{ o.quantity }}" data-type="{{ o.order_type }}" data-price="{{ o.price }}" data-product="{{ o.product }}">Place again</button></td>
+        </tr>
+    {% empty %}<tr><td colspan="10">None</td></tr>{% endfor %}
+    </tbody>
+</table>
+
+<h4>Cancelled orders ({{ cancelled_orders|length }})</h4>
+<table class="table table-condensed">
+    <thead><tr><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Product</th><th>Order type</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for o in cancelled_orders %}
+        <tr>
+            <td>{{ o.order_id }}</td>
+            <td>{{ o.tradingsymbol }}</td>
+            <td class="{% if o.transaction_type == 'BUY' %}text-success{% else %}text-danger{% endif %}">{{ o.transaction_type }}</td>
+            <td>{{ o.quantity }}</td>
+            <td>{{ o.order_timestamp }}</td>
+            <td>{{ o.exchange }}</td>
+            <td>{{ o.price }}</td>
+            <td>{{ o.product }}</td>
+            <td>{{ o.order_type }}</td>
+            <td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="{{ o.exchange }}" data-sym="{{ o.tradingsymbol }}" data-side="{{ o.transaction_type }}" data-qty="{{ o.quantity }}" data-type="{{ o.order_type }}" data-price="{{ o.price }}" data-product="{{ o.product }}">Place again</button></td>
+        </tr>
+    {% empty %}<tr><td colspan="10">None</td></tr>{% endfor %}
+    </tbody>
+</table>
+
+<h4>Holdings ({{ holdings|length }})</h4>
+<table class="table table-condensed">
+    <thead><tr><th>Security</th><th>Exchange</th><th>Qty</th><th>Avg price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
+    <tbody>
+    {% for h in holdings %}
+        <tr>
+            <td>{{ h.tradingsymbol }}</td>
+            <td>{{ h.exchange }}</td>
+            <td>{{ h.quantity }}</td>
+            <td>{{ h.average_price }}</td>
+            <td>{{ h.last_price }}</td>
+            <td class="{% if h.pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ h.pnl }}</td>
+        </tr>
+    {% empty %}<tr><td colspan="6">None</td></tr>{% endfor %}
+    </tbody>
+    <tfoot><tr><th colspan="5" class="text-right">Total P&amp;L</th><th class="{% if holdings_pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ holdings_pnl }}</th></tr></tfoot>
+</table>
+
+<h4>Positions ({{ positions|length }})</h4>
+<table class="table table-condensed">
+    <thead><tr><th>Security</th><th>Exchange</th><th>Product</th><th>Qty</th><th>Avg price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
+    <tbody>
+    {% for p in positions %}
+        <tr>
+            <td>{{ p.tradingsymbol }}</td>
+            <td>{{ p.exchange }}</td>
+            <td>{{ p.product }}</td>
+            <td>{{ p.quantity }}</td>
+            <td>{{ p.average_price }}</td>
+            <td>{{ p.last_price }}</td>
+            <td class="{% if p.pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ p.pnl }}</td>
+        </tr>
+    {% empty %}<tr><td colspan="7">None</td></tr>{% endfor %}
+    </tbody>
+    <tfoot><tr><th colspan="6" class="text-right">Total P&amp;L</th><th class="{% if positions_pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ positions_pnl }}</th></tr></tfoot>
+</table>
+{% endif %}
+
+<hr/>
+<a href="{% url 'home' %}" class="btn btn-default">Home</a>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    (function () {
+        var sel = document.getElementById('refreshInterval');
+        var label = document.getElementById('countdown');
+        // Restore the saved interval (default 30s) so it survives reloads.
+        var seconds = parseInt(localStorage.getItem('tradeRefresh') || '30', 10);
+        sel.value = seconds;
+        var remaining = seconds;
+        var timer = null;
+
+        function tick() {
+            if (remaining <= 0) { window.location.reload(); return; }
+            label.textContent = 'Refreshing in ' + remaining + 's';
+            remaining -= 1;
+        }
+        function start() {
+            if (timer) { clearInterval(timer); }
+            label.textContent = '';
+            if (seconds > 0) { remaining = seconds; tick(); timer = setInterval(tick, 1000); }
+        }
+        sel.addEventListener('change', function () {
+            seconds = parseInt(sel.value, 10);
+            localStorage.setItem('tradeRefresh', seconds);
+            start();
+        });
+        document.getElementById('refreshNow').addEventListener('click', function () {
+            window.location.reload();
+        });
+        start();
+    })();
+</script>
+<script>
+    (function () {
+        var place = document.getElementById('placeForm');
+        if (!place) { return; }        var apiKey = place.querySelector('[name=api_key]').value;
+        var sym = document.getElementById('po_symbol');
+        var ex = document.getElementById('po_exchange');
+        var type = document.getElementById('po_type');
+        var price = document.getElementById('po_price');
+        var band = document.getElementById('po_band');
+        var suggest = document.getElementById('po_suggest');
+        var sideInput = document.getElementById('po_side');
+        var buyBtn = document.getElementById('po_buy');
+        var sellBtn = document.getElementById('po_sell');
+        var submit = document.getElementById('po_submit');
+        var panel = document.getElementById('placePanel');
+
+        // BUY = green, SELL = red; recolor submit + panel.
+        function setSide(side) {
+            sideInput.value = side;
+            var buy = side === 'BUY';
+            buyBtn.className = 'btn ' + (buy ? 'btn-success active' : 'btn-default');
+            sellBtn.className = 'btn ' + (buy ? 'btn-default' : 'btn-danger active');
+            submit.className = 'btn ' + (buy ? 'btn-success' : 'btn-danger');
+            submit.textContent = buy ? 'Buy' : 'Sell';
+            panel.className = 'panel ' + (buy ? 'panel-success' : 'panel-danger');
+        }
+        buyBtn.addEventListener('click', function () { setSide('BUY'); });
+        sellBtn.addEventListener('click', function () { setSide('SELL'); });
+        setSide('BUY');
+
+        // Preload all NSE+BSE securities once, then search instantly in-browser.
+        var ALL = [];
+        fetch('/trade/instruments-all/?api_key=' + apiKey)
+            .then(function (r) { return r.json(); })
+            .then(function (d) { ALL = d.results || []; });
+
+        function hideSuggest() { suggest.style.display = 'none'; }
+        function pick(it) {
+            sym.value = it.symbol; ex.value = it.exchange; hideSuggest(); toggle();
+        }
+        sym.addEventListener('input', function () {
+            var q = sym.value.toUpperCase();
+            suggest.innerHTML = '';
+            if (!q) { hideSuggest(); return; }
+            var n = 0;
+            for (var i = 0; i < ALL.length && n < 30; i++) {
+                var it = ALL[i];
+                if (it.symbol.indexOf(q) !== -1 || (it.name || '').toUpperCase().indexOf(q) !== -1) {
+                    var li = document.createElement('button');
+                    li.type = 'button'; li.className = 'list-group-item';
+                    li.textContent = it.symbol + ' \u2014 ' + (it.name || '') + ' (' + it.exchange + ')';
+                    li.onclick = (function (x) { return function () { pick(x); }; })(it);
+                    suggest.appendChild(li); n++;
+                }
+            }
+            suggest.style.display = n ? 'block' : 'none';
+        });
+        document.addEventListener('click', function (e) { if (e.target !== sym) { hideSuggest(); } });
+
+        // MARKET disables price; LIMIT fetches and bounds by circuit.
+        function toggle() {
+            if (type.value === 'LIMIT') {
+                price.disabled = false;
+                fetch('/trade/quote/?api_key=' + apiKey + '&exchange=' + ex.value + '&symbol=' + encodeURIComponent(sym.value))
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        if (d.ok && d.lower != null) {
+                            price.min = d.lower; price.max = d.upper; price.value = d.last_price || '';
+                            band.textContent = 'Circuit: ' + d.lower + ' - ' + d.upper;
+                        }
+                    });
+            } else { price.disabled = true; price.value = ''; band.textContent = ''; }
+        }
+        type.addEventListener('change', toggle);
+        sym.addEventListener('change', toggle);
+        toggle();
+
+        window.modifyOrder = function (b) {
+            var f = document.getElementById('modifyForm');
+            f.style.display = 'block';
+            document.getElementById('mo_id').value = b.dataset.id;
+            document.getElementById('mo_symbol').value = b.dataset.sym;
+            document.getElementById('mo_exchange').value = b.dataset.ex;
+            document.getElementById('mo_side').value = b.dataset.side;
+            document.getElementById('mo_product').value = b.dataset.product;
+            document.getElementById('mo_newex').value = b.dataset.ex;
+            document.getElementById('mo_qty').value = b.dataset.qty;
+            document.getElementById('mo_type').value = b.dataset.type;
+            document.getElementById('mo_price').value = b.dataset.price;
+            document.getElementById('mo_label').textContent = b.dataset.sym;
+        };
+        window.replaceOrder = function (b) {
+            ex.value = b.dataset.ex; sym.value = b.dataset.sym; type.value = b.dataset.type;
+            setSide(b.dataset.side); place.quantity.value = b.dataset.qty;
+            place.product.value = b.dataset.product; toggle();
+            if (b.dataset.price) { price.value = b.dataset.price; }
+            panel.scrollIntoView();
+        };
+    })();
+
+    // Show order result as a dialog; strip msg/level so auto-refresh won't repeat it.
+    (function () {
+        var modal = document.getElementById('msgModal');
+        if (!modal) { return; }
+        $('#msgModal').modal('show');
+        var u = new URL(window.location.href);
+        u.searchParams.delete('msg'); u.searchParams.delete('level');
+        window.history.replaceState({}, '', u.toString());
+    })();
+</script>
+{% endblock %}

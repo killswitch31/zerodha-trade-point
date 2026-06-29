@@ -1,0 +1,79 @@
+{% extends "app/layout.html" %}
+
+{% block content %}
+
+<h2>{{ title }}</h2>
+
+<h3>Add a new app login user</h3>
+<form action="" method="post" class="form-horizontal" style="max-width:520px;">
+    {% csrf_token %}
+    <div class="form-group">
+        <label class="col-sm-3 control-label">Username</label>
+        <div class="col-sm-9">{{ form.username }}
+            {% for e in form.username.errors %}<span class="help-block text-danger">{{ e }}</span>{% endfor %}
+        </div>
+    </div>
+    <div class="form-group">
+        <label class="col-sm-3 control-label">Password</label>
+        <div class="col-sm-9">{{ form.password }}
+            {% for e in form.password.errors %}<span class="help-block text-danger">{{ e }}</span>{% endfor %}
+        </div>
+    </div>
+    <div class="form-group">
+        <label class="col-sm-3 control-label">Role</label>
+        <div class="col-sm-9">{{ form.role }}
+            <p class="help-block">Self only: manages their own accounts. Admin only: manages everyone. Trader all: trades all accounts but cannot configure or delete users.</p>
+        </div>
+    </div>
+    <div class="form-group">
+        <div class="col-sm-offset-3 col-sm-9">
+            <button type="submit" class="btn btn-primary">Create user</button>
+            <a href="{% url 'home' %}" class="btn btn-default">Home</a>
+        </div>
+    </div>
+</form>
+
+<h3>App login users</h3>
+<table class="table table-striped">
+    <thead><tr><th>Username</th><th>Role</th></tr></thead>
+    <tbody>
+    {% for a in app_users %}
+        <tr>
+            <td>{{ a.user.username }}</td>
+            <td>
+                <span class="label {% if a.is_admin %}label-warning{% elif a.is_trader_all %}label-success{% else %}label-info{% endif %}">{{ a.role_label }}</span>
+            </td>
+        </tr>
+    {% empty %}
+        <tr><td colspan="2">No users.</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+<h3>Zerodha accounts</h3>
+<table class="table">
+    <thead>
+        <tr>
+            <th>App user</th><th>Zerodha user</th><th>API key</th>
+            <th>API secret</th><th>Access token</th><th>Token status</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+        <tr>
+            <td>{{ r.user.owner.username|default:"-" }}</td>
+            <td>{{ r.user.user_name|default:"(unauthenticated)" }}</td>
+            <td><code>{{ r.user.api_key }}</code></td>
+            <td><code style="word-break:break-all;">{{ r.user.api_secret|default:"-" }}</code></td>
+            <td><code style="word-break:break-all;">{{ r.user.access_token|default:"-" }}</code></td>
+            <td data-token-key="{{ r.user.api_key }}">
+                <span class="label {{ r.presentation.css }}">{{ r.presentation.label }}</span>
+            </td>
+        </tr>
+    {% empty %}
+        <tr><td colspan="6">No stored accounts.</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+{% endblock %}

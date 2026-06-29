@@ -1,0 +1,120 @@
+{% extends "app/layout.html" %}
+
+{% block content %}
+
+<h2>{{ title }}</h2>
+
+{% if result %}
+    {% if success %}
+    <div class="alert alert-success">{{ message }}</div>
+    {% else %}
+    <div class="alert alert-danger">{{ message }}</div>
+    {% endif %}
+    <a href="{% url 'home' %}" class="btn btn-primary">Back to home</a>
+    <a href="{% url 'configurezkauth' %}" class="btn btn-default">Configure another user</a>
+{% else %}
+    {% if is_admin %}
+    <form action="" method="get" class="form-inline" style="margin-bottom:15px;">
+        <label>Show accounts for:
+            <select name="owner" class="form-control" onchange="this.form.submit()">
+                <option value="">-- All users --</option>
+                {% for o in owners %}
+                <option value="{{ o.username }}" {% if o.username == owner_filter %}selected{% endif %}>{{ o.username }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </form>
+    {% endif %}
+    {% if rows %}
+    <h3>Stored users</h3>
+    <table class="table">
+        <thead><tr><th>App user</th><th>Zerodha user</th><th>User ID</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+        {% for r in rows %}
+            <tr>
+                <td>{{ r.user.owner.username|default:"-" }}</td>
+                <td>{{ r.user.user_name|default:"(unauthenticated)" }}</td>
+                <td>{{ r.user.user_id }}</td>
+                <td data-token-key="{{ r.user.api_key }}">
+                    <span class="label {{ r.presentation.css }}">{{ r.presentation.label }}</span>
+                </td>
+                <td>
+                    {% if r.status == 'expired_manual' %}
+                    <span class="text-muted">Re-enter bearer token below</span>
+                    {% elif r.status != 'active' %}
+                    <a href="{% url 'configurezkauth' %}?reauth={{ r.user.api_key }}" class="btn btn-warning btn-sm">Re-authenticate</a>
+                    {% endif %}
+                    {% if not r.user.manual_token and r.user.access_token %}
+                    <button type="button" class="btn btn-info btn-sm" onclick="showToken(this)" data-token="{{ r.user.access_token }}">Show token</button>
+                    {% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <h3>Configure Zerodha authentication</h3>
+    <form action="" method="post" class="form-horizontal">
+        {% csrf_token %}
+        <div class="form-group">{{ form.method }}</div>
+        <div class="form-group">{{ form.api_key }}</div>
+        <div class="form-group" id="secretField">{{ form.api_secret }}
+            <p class="help-block">OAuth: you'll be redirected to Zerodha to authorize.</p>
+            <p class="help-block">Set this <strong>Redirect URL</strong> in your Zerodha Kite app settings:<br />
+                <code id="redirectUrl" style="word-break:break-all;">{{ redirect_url }}</code>
+                <button type="button" class="btn btn-default btn-xs" onclick="copyRedirectUrl()">Copy</button>
+            </p>
+        </div>
+        <div class="form-group" id="tokenField">{{ form.access_token }}
+            <p class="help-block">Bearer: token used directly; not auto-reauthenticated on expiry.</p>
+        </div>
+        <button type="submit" class="btn btn-primary">Authenticate</button>
+        <a href="{% url 'home' %}" class="btn btn-default">Home</a>
+    </form>
+    <script>
+        (function () {
+            function sync() {
+                var m = document.querySelector('input[name=method]:checked');
+                var bearer = m && m.value === 'bearer';
+                document.getElementById('secretField').style.display = bearer ? 'none' : '';
+                document.getElementById('tokenField').style.display = bearer ? '' : 'none';
+            }
+            document.querySelectorAll('input[name=method]').forEach(function (r) { r.addEventListener('change', sync); });
+            sync();
+        })();
+        function copyRedirectUrl() {
+            var text = document.getElementById('redirectUrl').textContent;
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(text);
+            } else {
+                var r = document.createRange();
+                r.selectNode(document.getElementById('redirectUrl'));
+                window.getSelection().removeAllRanges();
+                window.getSelection().addRange(r);
+                document.execCommand('copy');
+            }
+        }
+    </script>
+
+    <div class="modal fade" id="tokenModal" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal">&times;</button>
+                    <h4 class="modal-title">Access token</h4>
+                </div>
+                <div class="modal-body"><code id="tokenText" style="word-break:break-all;"></code></div>
+                <div class="modal-footer"><button type="button" class="btn btn-primary" data-dismiss="modal">Close</button></div>
+            </div>
+        </div>
+    </div>
+    <script>
+        function showToken(b) {
+            document.getElementById('tokenText').textContent = b.dataset.token;
+            $('#tokenModal').modal('show');
+        }
+    </script>
+{% endif %}
+
+{% endblock %}

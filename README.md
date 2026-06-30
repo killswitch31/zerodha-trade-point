@@ -154,8 +154,11 @@ az webapp config appsettings set \
 	--resource-group <YOUR_RESOURCE_GROUP> \
 	--settings \
 		DJANGO_ALLOWED_HOSTS="<YOUR_WEBAPP_NAME>.azurewebsites.net" \
-		DJANGO_SECRET_KEY="<YOUR_STRONG_SECRET_KEY>"
+		DJANGO_SECRET_KEY="<YOUR_STRONG_SECRET_KEY>" \
+		SCM_DO_BUILD_DURING_DEPLOYMENT="true"
 ```
+
+`SCM_DO_BUILD_DURING_DEPLOYMENT=true` ensures App Service runs build steps during deployment in production.
 
 If needed, also set Zerodha config values:
 

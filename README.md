@@ -100,6 +100,110 @@ Open:
 - App: `http://127.0.0.1:8000/`
 - Admin: `http://127.0.0.1:8000/admin/`
 
+## Deploy To Azure App Service
+
+Use your own values for subscription, resource group, plan, and app name.
+
+Example placeholders used below:
+
+- `<YOUR_SUBSCRIPTION_ID>`
+- `<YOUR_RESOURCE_GROUP>`
+- `<YOUR_APP_SERVICE_PLAN>`
+- `<YOUR_WEBAPP_NAME>`
+
+### 1. Login and select subscription
+
+```bash
+az login
+az account set --subscription <YOUR_SUBSCRIPTION_ID>
+```
+
+### 2. Create resource group (if needed)
+
+```bash
+az group create --name <YOUR_RESOURCE_GROUP> --location <YOUR_AZURE_REGION>
+```
+
+### 3. Create Linux App Service plan
+
+```bash
+az appservice plan create \
+	--name <YOUR_APP_SERVICE_PLAN> \
+	--resource-group <YOUR_RESOURCE_GROUP> \
+	--is-linux \
+	--sku B1
+```
+
+### 4. Create web app with Python runtime
+
+```bash
+az webapp create \
+	--name <YOUR_WEBAPP_NAME> \
+	--resource-group <YOUR_RESOURCE_GROUP> \
+	--plan <YOUR_APP_SERVICE_PLAN> \
+	--runtime "PYTHON:3.14"
+```
+
+### 5. Configure app settings
+
+Set Django host and secret-related settings using app settings:
+
+```bash
+az webapp config appsettings set \
+	--name <YOUR_WEBAPP_NAME> \
+	--resource-group <YOUR_RESOURCE_GROUP> \
+	--settings \
+		DJANGO_ALLOWED_HOSTS="<YOUR_WEBAPP_NAME>.azurewebsites.net" \
+		DJANGO_SECRET_KEY="<YOUR_STRONG_SECRET_KEY>"
+```
+
+If needed, also set Zerodha config values:
+
+```bash
+az webapp config appsettings set \
+	--name <YOUR_WEBAPP_NAME> \
+	--resource-group <YOUR_RESOURCE_GROUP> \
+	--settings \
+		KITE_API_KEY="<YOUR_KITE_API_KEY>" \
+		KITE_API_SECRET="<YOUR_KITE_API_SECRET>"
+```
+
+### 6. Configure startup command
+
+This project WSGI module is `zerodha_trade_point.wsgi`.
+
+```bash
+az webapp config set \
+	--name <YOUR_WEBAPP_NAME> \
+	--resource-group <YOUR_RESOURCE_GROUP> \
+	--startup-file "gunicorn zerodha_trade_point.wsgi --bind=0.0.0.0:8000 --workers=2 --timeout=120"
+```
+
+### 7. Deploy code
+
+From repo root:
+
+```bash
+az webapp up \
+	--name <YOUR_WEBAPP_NAME> \
+	--resource-group <YOUR_RESOURCE_GROUP> \
+	--runtime "PYTHON:3.14" \
+	--sku B1
+```
+
+### 8. Open app
+
+```bash
+az webapp browse --name <YOUR_WEBAPP_NAME> --resource-group <YOUR_RESOURCE_GROUP>
+```
+
+### Notes for your original commands
+
+- Use your own placeholders, not fixed values.
+- `az webapp config appsettings set` is the standard command for environment variables.
+- Startup module should be `zerodha_trade_point.wsgi` (not `mysite.wsgi`).
+- Keep app name consistent in all commands (`<YOUR_WEBAPP_NAME>`).
+
 ## Authentication And Core Data Model
 
 ### Entities and relationships

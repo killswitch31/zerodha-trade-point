@@ -1,5 +1,8 @@
 # Zerodha-Trade-Point
 
+> Disclaimer:
+> This project is intended only for managing your own Zerodha account and accounts of your close family members. Do not use this application to manage Zerodha accounts belonging to unrelated individuals or third parties.
+
 Django application to manage multiple Zerodha Kite accounts, role-based app users, and a browser-based trade dashboard.
 
 This application is built using Python v3.14.

@@ -63,6 +63,26 @@ python manage.py createsuperuser
 
 Follow prompts for username, email, and password.
 
+After first login, create another app user with role `admin_only` from `/managezkusers/`.
+Use that admin account for day-to-day operations and avoid using the Django superuser account every time.
+
+### 5.1 Change superuser password
+
+Use either of the following methods:
+
+Method A (interactive command):
+
+```bash
+python manage.py changepassword <SUPERUSER_USERNAME>
+```
+
+Method B (from Django admin):
+
+1. Login to `/admin/` with superuser credentials.
+2. Open `Users`.
+3. Select the superuser account.
+4. Click the password change link and save.
+
 ### 6. Local settings note (important)
 
 For local HTTP development with `runserver`, update these values temporarily in file `zerodha_trade_point/settings.py`:
@@ -276,12 +296,11 @@ Redirect URL to configure in Zerodha app is shown on this page and can be copied
 
 ## How Admin Manages App Users
 
-Page: `/managezkusers/` (admin only)
-
-Admins create app login users and assign roles (`self_only`, `admin_only`, `trader_all`).
-Users cannot self-register in this application.
-After creating a user, admins must share the username and password with that user through a secure channel.
-Admins can also change/reset a user's password from this endpoint.
+- Endpoint: `/managezkusers/` (admin only)
+- Admins can create app login users and assign roles (`self_only`, `admin_only`, `trader_all`).
+- Users cannot self-register in this application.
+- After creating a user, admins must share username and password with that user through a secure channel.
+- Admins can also change/reset a user's password from this endpoint.
 
 ### Create user
 

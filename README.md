@@ -278,6 +278,11 @@ Redirect URL to configure in Zerodha app is shown on this page and can be copied
 
 Page: `/managezkusers/` (admin only)
 
+Admins create app login users and assign roles (`self_only`, `admin_only`, `trader_all`).
+Users cannot self-register in this application.
+After creating a user, admins must share the username and password with that user through a secure channel.
+Admins can also change/reset a user's password from this endpoint.
+
 ### Create user
 
 1. Enter username and password.

@@ -65,15 +65,19 @@ Follow prompts for username, email, and password.
 
 ### 6. Local settings note (important)
 
-Current settings are production-leaning (`DEBUG = False`, SSL redirect enabled, secure cookies enabled).
-For local HTTP development with `runserver`, update `zerodha_trade_point/settings.py` temporarily:
+For local HTTP development with `runserver`, update these values temporarily in file `zerodha_trade_point/settings.py`:
 
 - Set `DEBUG = True`
 - Set `SECURE_SSL_REDIRECT = False`
 - Set `SESSION_COOKIE_SECURE = False`
 - Set `CSRF_COOKIE_SECURE = False`
 
-After deployment, revert these to secure values.
+For production, in file `zerodha_trade_point/settings.py`, revert to secure values:
+
+- Set `DEBUG = False`
+- Set `SECURE_SSL_REDIRECT = True`
+- Set `SESSION_COOKIE_SECURE = True`
+- Set `CSRF_COOKIE_SECURE = True`
 
 ### 7. Start application
 

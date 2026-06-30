@@ -41,9 +41,11 @@
 <hr/>
 <h3>{{ profile.user_name }} &mdash; {{ profile.email }}</h3>
 <div class="row">
-    <div class="col-md-4"><strong>Balance available:</strong> <span id="balanceValue">{{ balance }}</span></div>
-    <div class="col-md-4"><strong>Margin available:</strong> <span id="marginValue">{{ margin }}</span></div>
-    <div class="col-md-4"><strong>Margin used:</strong> <span id="marginUsedValue">{{ margin_used }}</span></div>
+    <div class="col-md-3"><strong>Net:</strong> <span id="netValue">{{ net }}</span></div>
+    <div class="col-md-3"><strong>Opening Balance:</strong> <span id="openingBalanceValue">{{ opening_balance }}</span></div>
+    <div class="col-md-2"><strong>Live Balance:</strong> <span id="liveBalanceValue">{{ live_balance }}</span></div>
+    <div class="col-md-2"><strong>Cash:</strong> <span id="cashValue">{{ cash }}</span></div>
+    <div class="col-md-2"><strong>Debits:</strong> <span id="debitsValue">{{ debits }}</span></div>
 </div>
 
 <h4>Place order</h4>
@@ -332,9 +334,11 @@
                         updateRefreshStatus('Refresh failed');
                         return;
                     }
-                    document.getElementById('balanceValue').textContent = displayValue(data.balance);
-                    document.getElementById('marginValue').textContent = displayValue(data.margin);
-                    document.getElementById('marginUsedValue').textContent = displayValue(data.margin_used);
+                    document.getElementById('netValue').textContent = displayValue(data.net);
+                    document.getElementById('openingBalanceValue').textContent = displayValue(data.opening_balance);
+                    document.getElementById('liveBalanceValue').textContent = displayValue(data.live_balance);
+                    document.getElementById('cashValue').textContent = displayValue(data.cash);
+                    document.getElementById('debitsValue').textContent = displayValue(data.debits);
 
                     if (data.selected_status) {
                         updateStatus(data.selected_status);

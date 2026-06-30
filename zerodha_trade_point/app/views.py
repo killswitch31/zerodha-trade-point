@@ -505,23 +505,9 @@ def _trade_data_for_user(user):
     if isinstance(positions, dict):
         positions = positions.get('net', [])
     positions = [_normalize_position(p) for p in positions]
-    equity = margins.get('equity', {}) if isinstance(margins, dict) else {}
-    available = equity.get('available', {}) if isinstance(equity.get('available', {}), dict) else {}
-    live_balance = available.get('live_balance')
-    cash_balance = available.get('cash')
-    available_balance = available.get('available')
-    balance = _scalar_value(
-        live_balance if live_balance is not None else
-        cash_balance if cash_balance is not None else
-        available_balance
-    )
-    net_margin = equity.get('net')
-    available_net = available.get('net')
-    margin = _scalar_value(
-        net_margin if net_margin is not None else
-        available_net if available_net is not None else
-        equity.get('available')
-    )
+    segment = margins.get('equity', {}) if isinstance(margins, dict) and isinstance(margins.get('equity'), dict) else margins
+    available = segment.get('available', {}) if isinstance(segment, dict) and isinstance(segment.get('available'), dict) else {}
+    utilised = segment.get('utilised', {}) if isinstance(segment, dict) and isinstance(segment.get('utilised'), dict) else {}
     return {
         'profile': profile,
         'open_orders': [o for o in orders if o.get('status') == 'OPEN'],
@@ -531,9 +517,11 @@ def _trade_data_for_user(user):
         'positions': positions,
         'holdings_pnl': sum(_scalar_value(h.get('pnl', 0)) or 0 for h in holdings),
         'positions_pnl': sum(_scalar_value(p.get('pnl', 0)) or 0 for p in positions),
-        'balance': balance,
-        'margin': margin,
-        'margin_used': _calculate_margin_used(margins),
+        'net': _scalar_value(segment.get('net')) if isinstance(segment, dict) else None,
+        'opening_balance': _scalar_value(available.get('opening_balance')),
+        'live_balance': _scalar_value(available.get('live_balance')),
+        'cash': _scalar_value(available.get('cash')),
+        'debits': _scalar_value(utilised.get('debits')),
     }
 
 
@@ -547,9 +535,11 @@ def _empty_trade_data():
         'positions': [],
         'holdings_pnl': 0,
         'positions_pnl': 0,
-        'balance': None,
-        'margin': None,
-        'margin_used': None,
+        'net': None,
+        'opening_balance': None,
+        'live_balance': None,
+        'cash': None,
+        'debits': None,
     }
 
 

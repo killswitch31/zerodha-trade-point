@@ -7,7 +7,7 @@ Django application to manage multiple Zerodha Kite accounts, role-based app user
 
 This application is built using Python v3.14.
 
-## Clone And Run Locally
+## **Clone And Run Locally**
 
 ### 1. Clone repository
 
@@ -32,7 +32,7 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 
-### 2.1 Verify you are inside venv
+#### 2.1 Verify you are inside venv
 
 After activation, your shell prompt usually shows `(.venv)`.
 
@@ -69,7 +69,7 @@ Follow prompts for username, email, and password.
 After first login, create another app user with role `admin_only` from `/managezkusers/`.
 Use that admin account for day-to-day operations and avoid using the Django superuser account every time.
 
-### 5.1 Change superuser password
+#### 5.1 Change superuser password
 
 Use either of the following methods:
 
@@ -127,7 +127,7 @@ Open:
 - App: `http://127.0.0.1:8000/`
 - Admin: `http://127.0.0.1:8000/admin/`
 
-## Deploy To Azure App Service
+## **Deploy To Azure App Service**
 
 Use your own values for subscription, resource group, plan, and app name.
 

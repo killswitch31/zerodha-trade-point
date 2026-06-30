@@ -130,6 +130,8 @@ az group create --name <YOUR_RESOURCE_GROUP> --location <YOUR_AZURE_REGION>
 
 ### 3. Create Linux App Service plan
 
+Note: `B1` is a paid App Service plan and will incur Azure charges. Before creating the plan, review Azure pricing and explore cheaper or free plan options in official Azure documentation.
+
 ```bash
 az appservice plan create \
 	--name <YOUR_APP_SERVICE_PLAN> \

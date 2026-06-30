@@ -19,6 +19,7 @@ class ViewTest(TestCase):
             django.setup()
 
     def test_home(self):
-        """Tests the home page."""
-        response = self.client.get('/')
-        self.assertContains(response, 'Home Page', 1, 200)
+        """Unauthenticated users are redirected to login."""
+        response = self.client.get('/', secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login/', response['Location'])

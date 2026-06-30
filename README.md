@@ -2,6 +2,8 @@
 
 Django application to manage multiple Zerodha Kite accounts, role-based app users, and a browser-based trade dashboard.
 
+This application is built using Python v3.14.
+
 ## Clone And Run Locally
 
 ### 1. Clone repository
@@ -16,14 +18,14 @@ cd zerodha_trade_point/zerodha_trade_point
 macOS/Linux:
 
 ```bash
-python3.11 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 ```
 
 Windows (PowerShell):
 
 ```powershell
-py -3.11 -m venv .venv
+python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 

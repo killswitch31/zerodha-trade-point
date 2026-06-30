@@ -14,7 +14,7 @@
         <div class="panel panel-primary">
             <div class="panel-heading"><h3 class="panel-title">Configure ZK Auth</h3></div>
             <div class="panel-body">
-                <p>Connect an account with API key &amp; secret or a bearer token.</p>
+                <p>Connect an account with API key &amp; secret using Zerodha OAuth.</p>
                 <a href="{% url 'configurezkauth' %}" class="btn btn-primary btn-block">Configure ZK Auth</a>
             </div>
         </div>
@@ -32,10 +32,10 @@
     {% if app_can_configure %}
     <div class="col-md-4">
         <div class="panel panel-danger">
-            <div class="panel-heading"><h3 class="panel-title">Delete User</h3></div>
+            <div class="panel-heading"><h3 class="panel-title">Delete ZK User</h3></div>
             <div class="panel-body">
-                <p>Remove a stored account and its credentials.</p>
-                <a href="{% url 'deleteuser' %}" class="btn btn-danger btn-block">Delete User</a>
+                <p>Remove a configured Zerodha account and its credentials.</p>
+                <a href="{% url 'deletezkuser' %}" class="btn btn-danger btn-block">Delete ZK User</a>
             </div>
         </div>
     </div>

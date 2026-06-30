@@ -36,6 +36,7 @@ class KiteUser(models.Model):
     api_key = models.CharField(max_length=64, unique=True)
     api_secret = models.CharField(max_length=128, blank=True, default='')
     access_token = models.CharField(max_length=128, blank=True, default='')
+    refresh_token = models.CharField(max_length=128, blank=True, default='')
     manual_token = models.BooleanField(default=False)
     user_id = models.CharField(max_length=32, blank=True, default='')
     user_name = models.CharField(max_length=128, blank=True, default='')

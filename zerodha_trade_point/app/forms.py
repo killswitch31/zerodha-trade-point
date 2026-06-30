@@ -21,29 +21,19 @@ class BootstrapAuthenticationForm(AuthenticationForm):
 
 
 class AddUserForm(forms.Form):
-    """Collects credentials: API key+secret (oauth) or a direct bearer token."""
-    METHOD_CHOICES = (('oauth', 'API key + secret'), ('bearer', 'Bearer token'))
-    method = forms.ChoiceField(choices=METHOD_CHOICES, initial='oauth',
-                               widget=forms.RadioSelect)
+    """Collects credentials for Zerodha OAuth: API key + secret."""
     api_key = forms.CharField(max_length=64,
                               widget=forms.TextInput({
                                   'class': 'form-control',
                                   'placeholder': 'API key'}))
-    api_secret = forms.CharField(max_length=128, required=False,
+    api_secret = forms.CharField(max_length=128,
                                  widget=forms.PasswordInput({
                                      'class': 'form-control',
                                      'placeholder': 'API secret'}))
-    access_token = forms.CharField(max_length=128, required=False,
-                                   widget=forms.TextInput({
-                                       'class': 'form-control',
-                                       'placeholder': 'Bearer / access token'}))
 
     def clean(self):
         cleaned = super().clean()
-        if cleaned.get('method') == 'bearer':
-            if not cleaned.get('access_token'):
-                self.add_error('access_token', 'Access token is required.')
-        elif not cleaned.get('api_secret'):
+        if not cleaned.get('api_secret'):
             self.add_error('api_secret', 'API secret is required.')
         return cleaned
 
@@ -67,4 +57,14 @@ class ManageZkUserForm(forms.Form):
         if User.objects.filter(username__iexact=username).exists():
             raise forms.ValidationError('That username is already taken.')
         return username
+
+
+class EditAppUserForm(forms.Form):
+    """Admin-only: modify password and role for an existing app user."""
+    password = forms.CharField(required=False,
+                               widget=forms.PasswordInput({
+                                   'class': 'form-control',
+                                   'placeholder': 'Leave blank to keep current password'}))
+    role = forms.ChoiceField(choices=Profile.ROLE_CHOICES,
+                             widget=forms.Select({'class': 'form-control'}))
 

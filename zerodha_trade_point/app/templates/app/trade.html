@@ -16,16 +16,10 @@
         <span class="label {{ selected_status.css }}">{{ selected_status.label }}</span>
     </span>
     {% endif %}
-    <label style="margin-left:15px;">Refresh:
-        <select id="refreshInterval" class="form-control">
-            <option value="0">Off</option>
-            <option value="15">15s</option>
-            <option value="30">30s</option>
-            <option value="60">60s</option>
-        </select>
-    </label>
-    <button type="button" id="refreshNow" class="btn btn-primary" style="margin-left:10px;">Refresh now</button>
-    <span id="countdown" class="text-muted" style="margin-left:10px;"></span>
+    <button type="button" id="checkTokenStatus" class="btn btn-info" style="margin-left:10px;">Check Access Token Validity</button>
+    <button type="button" id="refreshTradeData" class="btn btn-primary" style="margin-left:10px;" data-trade-all="{{ trade_all|yesno:'1,0' }}">Refresh Trade Data</button>
+    <span id="refreshStatus" class="text-muted" style="margin-left:12px;"></span>
+    <span id="refreshCountdown" class="text-muted" style="margin-left:12px;"></span>
 </form>
 
 {% if banner or error %}
@@ -47,8 +41,9 @@
 <hr/>
 <h3>{{ profile.user_name }} &mdash; {{ profile.email }}</h3>
 <div class="row">
-    <div class="col-md-6"><strong>Balance available:</strong> {{ balance }}</div>
-    <div class="col-md-6"><strong>Margin available:</strong> {{ margin }}</div>
+    <div class="col-md-4"><strong>Balance available:</strong> <span id="balanceValue">{{ balance }}</span></div>
+    <div class="col-md-4"><strong>Margin available:</strong> <span id="marginValue">{{ margin }}</span></div>
+    <div class="col-md-4"><strong>Margin used:</strong> <span id="marginUsedValue">{{ margin_used }}</span></div>
 </div>
 
 <h4>Place order</h4>
@@ -74,35 +69,65 @@
             <div class="form-group" style="position:relative;">
                 <label>Security</label>
                 <input name="tradingsymbol" id="po_symbol" class="form-control" placeholder="Type symbol or company name" autocomplete="off" />
-                <ul id="po_suggest" class="list-group" style="position:absolute;z-index:10;width:100%;max-height:240px;overflow:auto;display:none;"></ul>
+                <ul id="po_suggest" class="list-group" style="position:absolute;z-index:10;top:100%;left:0;right:0;max-height:240px;overflow:auto;display:none;margin-top:0;border-top:none;box-sizing:border-box;"></ul>
             </div>
             <div class="form-group"><label>Quantity</label><input name="quantity" type="number" min="1" value="1" class="form-control" /></div>
             <div class="form-group"><label>Product</label><select name="product" class="form-control"><option selected>CNC</option><option>MIS</option></select></div>
-            <div class="form-group"><label>Order type</label><select name="order_type" id="po_type" class="form-control"><option>MARKET</option><option>LIMIT</option></select></div>
+            <div class="form-group"><label>Order type</label><select name="order_type" id="po_type" class="form-control"><option>MARKET</option><option selected>LIMIT</option></select></div>
             <div class="form-group"><label>Price</label><input name="price" id="po_price" type="number" step="0.05" class="form-control" placeholder="Price" disabled /><span id="po_band" class="text-muted"></span></div>
             <button type="submit" id="po_submit" class="btn btn-success btn-block">Buy</button>
         </form>
     </div>
 </div>
 
-<form id="modifyForm" method="post" action="{% url 'trade_modify' %}" class="form-inline" style="display:none;">
-    {% csrf_token %}
-    <input type="hidden" name="api_key" value="{{ selected }}" />
-    <input type="hidden" name="order_id" id="mo_id" />
-    <input type="hidden" name="exchange" id="mo_exchange" />
-    <input type="hidden" name="tradingsymbol" id="mo_symbol" />
-    <input type="hidden" name="transaction_type" id="mo_side" />
-    <input type="hidden" name="product" id="mo_product" />
-    <strong>Modify <span id="mo_label"></span>:</strong>
-    <select name="new_exchange" id="mo_newex" class="form-control"><option>NSE</option><option>BSE</option></select>
-    <input name="quantity" id="mo_qty" type="number" min="1" class="form-control" style="width:80px;" />
-    <select name="order_type" id="mo_type" class="form-control"><option>MARKET</option><option>LIMIT</option></select>
-    <input name="price" id="mo_price" type="number" step="0.05" class="form-control" style="width:110px;" />
-    <button type="submit" class="btn btn-warning">Save</button>
-</form>
+<div id="modifyModal" class="modal fade" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                <h4 class="modal-title">Modify order <span id="mo_label"></span></h4>
+            </div>
+            <div class="modal-body">
+                <form id="modifyForm" method="post" action="{% url 'trade_modify' %}" class="form-horizontal">
+                    {% csrf_token %}
+                    <input type="hidden" name="api_key" value="{{ selected }}" />
+                    <input type="hidden" name="order_id" id="mo_id" />
+                    <input type="hidden" name="exchange" id="mo_exchange" />
+                    <input type="hidden" name="tradingsymbol" id="mo_symbol" />
+                    <input type="hidden" name="transaction_type" id="mo_side" />
+                    <input type="hidden" name="product" id="mo_product" />
+                    <div class="form-group">
+                        <label class="control-label">Current exchange</label>
+                        <p class="form-control-static" id="mo_current_exchange"></p>
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label" for="mo_newex">New exchange</label>
+                        <select name="new_exchange" id="mo_newex" class="form-control"><option>NSE</option><option>BSE</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label" for="mo_qty">Quantity</label>
+                        <input name="quantity" id="mo_qty" type="number" min="1" class="form-control" />
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label" for="mo_type">Order type</label>
+                        <select name="order_type" id="mo_type" class="form-control"><option>MARKET</option><option>LIMIT</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label" for="mo_price">Price</label>
+                        <input name="price" id="mo_price" type="number" step="0.05" class="form-control" />
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                <button type="submit" form="modifyForm" class="btn btn-warning">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
 
-<h4>Open orders ({{ open_orders|length }})</h4>
-<table class="table table-condensed">
+<h4 id="openOrdersHeading">Open orders ({{ open_orders|length }})</h4>
+<table id="openOrdersTable" class="table table-condensed">
     <thead><tr><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Product</th><th>Order type</th><th>Actions</th></tr></thead>
     <tbody>
     {% for o in open_orders %}
@@ -125,8 +150,8 @@
     </tbody>
 </table>
 
-<h4>Executed orders ({{ executed_orders|length }})</h4>
-<table class="table table-condensed">
+<h4 id="executedOrdersHeading">Executed orders ({{ executed_orders|length }})</h4>
+<table id="executedOrdersTable" class="table table-condensed">
     <thead><tr><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Product</th><th>Order type</th><th>Actions</th></tr></thead>
     <tbody>
     {% for o in executed_orders %}
@@ -146,8 +171,8 @@
     </tbody>
 </table>
 
-<h4>Cancelled orders ({{ cancelled_orders|length }})</h4>
-<table class="table table-condensed">
+<h4 id="cancelledOrdersHeading">Cancelled orders ({{ cancelled_orders|length }})</h4>
+<table id="cancelledOrdersTable" class="table table-condensed">
     <thead><tr><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Product</th><th>Order type</th><th>Actions</th></tr></thead>
     <tbody>
     {% for o in cancelled_orders %}
@@ -168,7 +193,7 @@
 </table>
 
 <h4>Holdings ({{ holdings|length }})</h4>
-<table class="table table-condensed">
+<table id="holdingsTable" class="table table-condensed">
     <thead><tr><th>Security</th><th>Exchange</th><th>Qty</th><th>Avg price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
     <tbody>
     {% for h in holdings %}
@@ -182,11 +207,11 @@
         </tr>
     {% empty %}<tr><td colspan="6">None</td></tr>{% endfor %}
     </tbody>
-    <tfoot><tr><th colspan="5" class="text-right">Total P&amp;L</th><th class="{% if holdings_pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ holdings_pnl }}</th></tr></tfoot>
+    <tfoot><tr><th colspan="5" class="text-right">Total P&amp;L</th><th id="holdingsTotalPnl" class="{% if holdings_pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ holdings_pnl }}</th></tr></tfoot>
 </table>
 
 <h4>Positions ({{ positions|length }})</h4>
-<table class="table table-condensed">
+<table id="positionsTable" class="table table-condensed">
     <thead><tr><th>Security</th><th>Exchange</th><th>Product</th><th>Qty</th><th>Avg price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
     <tbody>
     {% for p in positions %}
@@ -201,7 +226,7 @@
         </tr>
     {% empty %}<tr><td colspan="7">None</td></tr>{% endfor %}
     </tbody>
-    <tfoot><tr><th colspan="6" class="text-right">Total P&amp;L</th><th class="{% if positions_pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ positions_pnl }}</th></tr></tfoot>
+    <tfoot><tr><th colspan="6" class="text-right">Total P&amp;L</th><th id="positionsTotalPnl" class="{% if positions_pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ positions_pnl }}</th></tr></tfoot>
 </table>
 {% endif %}
 
@@ -213,33 +238,238 @@
 {% block scripts %}
 <script>
     (function () {
-        var sel = document.getElementById('refreshInterval');
-        var label = document.getElementById('countdown');
-        // Restore the saved interval (default 30s) so it survives reloads.
-        var seconds = parseInt(localStorage.getItem('tradeRefresh') || '30', 10);
-        sel.value = seconds;
-        var remaining = seconds;
-        var timer = null;
+        var checkTokenButton = document.getElementById('checkTokenStatus');
+        var refreshTradeButton = document.getElementById('refreshTradeData');
+        var statusCell = document.querySelector('[data-token-key]');
+        if (!statusCell) {
+            return;
+        }
+        var apiKey = statusCell.getAttribute('data-token-key');
+        var owner = new URLSearchParams(window.location.search).get('owner') || '';
+        var tokenUrl = '{% url 'token_statuses' %}' + (owner ? ('?owner=' + encodeURIComponent(owner)) : '');
+        var tradeUrl = '{% url 'trade_refresh_data' %}';
+        var cancelUrl = '{% url 'trade_cancel' %}';
+        var csrfToken = document.querySelector('[name=csrfmiddlewaretoken]') ? document.querySelector('[name=csrfmiddlewaretoken]').value : '';
+        var refreshStatus = document.getElementById('refreshStatus');
+        var refreshCountdown = document.getElementById('refreshCountdown');
+        var refreshIntervalSeconds = 60;
+        var refreshCountdownSeconds = refreshIntervalSeconds;
+        var isRefreshing = false;
 
-        function tick() {
-            if (remaining <= 0) { window.location.reload(); return; }
-            label.textContent = 'Refreshing in ' + remaining + 's';
-            remaining -= 1;
+        function updateStatus(status) {
+            var badge = statusCell.querySelector('.label');
+            if (!badge || !status) { return; }
+            badge.className = 'label ' + status.css;
+            badge.textContent = status.label;
         }
-        function start() {
-            if (timer) { clearInterval(timer); }
-            label.textContent = '';
-            if (seconds > 0) { remaining = seconds; tick(); timer = setInterval(tick, 1000); }
+
+        function refreshTokenStatus() {
+            fetch(tokenUrl)
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    var statuses = data.statuses || {};
+                    var status = statuses[apiKey];
+                    if (status) {
+                        updateStatus(status);
+                    }
+                })
+                .catch(function (error) {
+                    console.error('Error checking token status:', error);
+                });
         }
-        sel.addEventListener('change', function () {
-            seconds = parseInt(sel.value, 10);
-            localStorage.setItem('tradeRefresh', seconds);
-            start();
-        });
-        document.getElementById('refreshNow').addEventListener('click', function () {
-            window.location.reload();
-        });
-        start();
+
+        function displayValue(value) {
+            return value === null || value === undefined ? '' : value;
+        }
+
+        function setRefreshButtonState(loading) {
+            if (!refreshTradeButton) { return; }
+            refreshTradeButton.disabled = !!loading;
+            refreshTradeButton.textContent = loading ? 'Refreshing...' : 'Refresh Trade Data';
+        }
+
+        function updateRefreshStatus(message) {
+            if (refreshStatus) {
+                refreshStatus.textContent = message;
+            }
+        }
+
+        function resetCountdown() {
+            refreshCountdownSeconds = refreshIntervalSeconds;
+            if (refreshCountdown) {
+                refreshCountdown.textContent = 'Next refresh in ' + refreshCountdownSeconds + 's';
+            }
+        }
+
+        function tickCountdown() {
+            refreshCountdownSeconds = Math.max(0, refreshCountdownSeconds - 1);
+            if (refreshCountdown) {
+                refreshCountdown.textContent = 'Next refresh in ' + refreshCountdownSeconds + 's';
+            }
+        }
+
+        function refreshTradeData() {
+            if (!apiKey) {
+                return;
+            }
+            if (isRefreshing) {
+                return;
+            }
+            isRefreshing = true;
+            setRefreshButtonState(true);
+            updateRefreshStatus('Refreshing trade data...');
+
+            var tradeAll = refreshTradeButton.dataset.tradeAll === '1';
+            var params = new URLSearchParams({ api_key: tradeAll ? 'all' : apiKey });
+            if (tradeAll) {
+                params.set('selected_api_key', apiKey);
+            }
+            fetch(tradeUrl + '?' + params.toString())
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (data.error) {
+                        console.error('Error refreshing trade data:', data.error);
+                        updateRefreshStatus('Refresh failed');
+                        return;
+                    }
+                    document.getElementById('balanceValue').textContent = displayValue(data.balance);
+                    document.getElementById('marginValue').textContent = displayValue(data.margin);
+                    document.getElementById('marginUsedValue').textContent = displayValue(data.margin_used);
+
+                    if (data.selected_status) {
+                        updateStatus(data.selected_status);
+                    }
+
+                    document.getElementById('openOrdersHeading').textContent = 'Open orders (' + (data.open_orders ? data.open_orders.length : 0) + ')';
+                    document.getElementById('executedOrdersHeading').textContent = 'Executed orders (' + (data.executed_orders ? data.executed_orders.length : 0) + ')';
+                    document.getElementById('cancelledOrdersHeading').textContent = 'Cancelled orders (' + (data.cancelled_orders ? data.cancelled_orders.length : 0) + ')';
+
+                    var holdingsHtml = (data.holdings || []).map(function (h) {
+                        return '<tr>' +
+                            '<td>' + displayValue(h.tradingsymbol) + '</td>' +
+                            '<td>' + displayValue(h.exchange) + '</td>' +
+                            '<td>' + displayValue(h.quantity) + '</td>' +
+                            '<td>' + displayValue(h.average_price) + '</td>' +
+                            '<td>' + displayValue(h.last_price) + '</td>' +
+                            '<td class="' + ((h.pnl || 0) < 0 ? 'text-danger' : 'text-success') + '">' + displayValue(h.pnl) + '</td>' +
+                            '</tr>';
+                    }).join('');
+                    var holdingsBody = document.querySelector('#holdingsTable tbody');
+                    if (holdingsBody) { holdingsBody.innerHTML = holdingsHtml || '<tr><td colspan="6">None</td></tr>'; }
+                    var holdingsPnl = document.querySelector('#holdingsTotalPnl');
+                    if (holdingsPnl) { holdingsPnl.textContent = displayValue(data.holdings_pnl || 0); holdingsPnl.className = (data.holdings_pnl < 0 ? 'text-danger' : 'text-success'); }
+
+                    var positionsHtml = (data.positions || []).map(function (p) {
+                        return '<tr>' +
+                            '<td>' + displayValue(p.tradingsymbol) + '</td>' +
+                            '<td>' + displayValue(p.exchange) + '</td>' +
+                            '<td>' + displayValue(p.product) + '</td>' +
+                            '<td>' + displayValue(p.quantity) + '</td>' +
+                            '<td>' + displayValue(p.average_price) + '</td>' +
+                            '<td>' + displayValue(p.last_price) + '</td>' +
+                            '<td class="' + ((p.pnl || 0) < 0 ? 'text-danger' : 'text-success') + '">' + displayValue(p.pnl) + '</td>' +
+                            '</tr>';
+                    }).join('');
+                    var positionsBody = document.querySelector('#positionsTable tbody');
+                    if (positionsBody) { positionsBody.innerHTML = positionsHtml || '<tr><td colspan="7">None</td></tr>'; }
+                    var positionsPnl = document.querySelector('#positionsTotalPnl');
+                    if (positionsPnl) { positionsPnl.textContent = displayValue(data.positions_pnl || 0); positionsPnl.className = (data.positions_pnl < 0 ? 'text-danger' : 'text-success'); }
+
+                    var openOrdersHtml = (data.open_orders || []).map(function (o) {
+                        return '<tr>' +
+                            '<td>' + displayValue(o.order_id) + '</td>' +
+                            '<td>' + displayValue(o.tradingsymbol) + '</td>' +
+                            '<td class="' + ((o.transaction_type === 'BUY') ? 'text-success' : 'text-danger') + '">' + displayValue(o.transaction_type) + '</td>' +
+                            '<td>' + displayValue(o.quantity) + '</td>' +
+                            '<td>' + displayValue(o.order_timestamp) + '</td>' +
+                            '<td>' + displayValue(o.exchange) + '</td>' +
+                            '<td>' + displayValue(o.price) + '</td>' +
+                            '<td>' + displayValue(o.product) + '</td>' +
+                            '<td>' + displayValue(o.order_type) + '</td>' +
+                            '<td>' +
+                                '<button type="button" class="btn btn-warning btn-sm" onclick="modifyOrder(this)" data-id="' + displayValue(o.order_id) + '" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Modify</button>' +
+                                '<form method="post" action="' + cancelUrl + '" style="display:inline; margin-left:3px;" onsubmit="return confirm(\'Cancel order?\');">' +
+                                    '<input type="hidden" name="csrfmiddlewaretoken" value="' + csrfToken + '">' +
+                                    '<input type="hidden" name="api_key" value="' + displayValue(data.api_key) + '">' +
+                                    '<input type="hidden" name="order_id" value="' + displayValue(o.order_id) + '">' +
+                                    '<button class="btn btn-danger btn-sm" type="submit">Cancel</button>' +
+                                '</form>' +
+                            '</td>' +
+                            '</tr>';
+                    }).join('');
+                    var openBody = document.querySelector('#openOrdersTable tbody');
+                    if (openBody) { openBody.innerHTML = openOrdersHtml || '<tr><td colspan="10">None</td></tr>'; }
+
+                    var executedHtml = (data.executed_orders || []).map(function (o) {
+                        return '<tr>' +
+                            '<td>' + displayValue(o.order_id) + '</td>' +
+                            '<td>' + displayValue(o.tradingsymbol) + '</td>' +
+                            '<td class="' + ((o.transaction_type === 'BUY') ? 'text-success' : 'text-danger') + '">' + displayValue(o.transaction_type) + '</td>' +
+                            '<td>' + displayValue(o.quantity) + '</td>' +
+                            '<td>' + displayValue(o.order_timestamp) + '</td>' +
+                            '<td>' + displayValue(o.exchange) + '</td>' +
+                            '<td>' + displayValue(o.price) + '</td>' +
+                            '<td>' + displayValue(o.product) + '</td>' +
+                            '<td>' + displayValue(o.order_type) + '</td>' +
+                            '<td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Place again</button></td>' +
+                            '</tr>';
+                    }).join('');
+                    var executedBody = document.querySelector('#executedOrdersTable tbody');
+                    if (executedBody) { executedBody.innerHTML = executedHtml || '<tr><td colspan="10">None</td></tr>'; }
+
+                    var cancelledHtml = (data.cancelled_orders || []).map(function (o) {
+                        return '<tr>' +
+                            '<td>' + displayValue(o.order_id) + '</td>' +
+                            '<td>' + displayValue(o.tradingsymbol) + '</td>' +
+                            '<td class="' + ((o.transaction_type === 'BUY') ? 'text-success' : 'text-danger') + '">' + displayValue(o.transaction_type) + '</td>' +
+                            '<td>' + displayValue(o.quantity) + '</td>' +
+                            '<td>' + displayValue(o.order_timestamp) + '</td>' +
+                            '<td>' + displayValue(o.exchange) + '</td>' +
+                            '<td>' + displayValue(o.price) + '</td>' +
+                            '<td>' + displayValue(o.product) + '</td>' +
+                            '<td>' + displayValue(o.order_type) + '</td>' +
+                            '<td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Place again</button></td>' +
+                            '</tr>';
+                    }).join('');
+                    var cancelledBody = document.querySelector('#cancelledOrdersTable tbody');
+                    if (cancelledBody) { cancelledBody.innerHTML = cancelledHtml || '<tr><td colspan="10">None</td></tr>'; }
+                })
+                .catch(function (error) {
+                    console.error('Error refreshing trade data:', error);
+                    updateRefreshStatus('Refresh failed');
+                })
+                .finally(function () {
+                    isRefreshing = false;
+                    setRefreshButtonState(false);
+                    resetCountdown();
+                    if (!refreshStatus || refreshStatus.textContent !== 'Refresh failed') {
+                        var now = new Date();
+                        updateRefreshStatus('Last refreshed ' + now.toLocaleTimeString());
+                    }
+                });
+        }
+
+        function startTokenPolling() {
+            refreshTokenStatus();
+            setInterval(refreshTokenStatus, 600000);
+        }
+
+        function startTradePolling() {
+            refreshTradeData();
+            resetCountdown();
+            setInterval(refreshTradeData, 60000);
+            setInterval(tickCountdown, 1000);
+        }
+
+        if (checkTokenButton) {
+            checkTokenButton.addEventListener('click', refreshTokenStatus);
+        }
+        if (refreshTradeButton) {
+            refreshTradeButton.addEventListener('click', refreshTradeData);
+        }
+
+        startTokenPolling();
+        startTradePolling();
     })();
 </script>
 <script>
@@ -320,13 +550,14 @@
         toggle();
 
         window.modifyOrder = function (b) {
-            var f = document.getElementById('modifyForm');
-            f.style.display = 'block';
+            var f = document.getElementById('modifyModal');
+            $('#modifyModal').modal('show');
             document.getElementById('mo_id').value = b.dataset.id;
             document.getElementById('mo_symbol').value = b.dataset.sym;
             document.getElementById('mo_exchange').value = b.dataset.ex;
             document.getElementById('mo_side').value = b.dataset.side;
             document.getElementById('mo_product').value = b.dataset.product;
+            document.getElementById('mo_current_exchange').textContent = b.dataset.ex || '';
             document.getElementById('mo_newex').value = b.dataset.ex;
             document.getElementById('mo_qty').value = b.dataset.qty;
             document.getElementById('mo_type').value = b.dataset.type;

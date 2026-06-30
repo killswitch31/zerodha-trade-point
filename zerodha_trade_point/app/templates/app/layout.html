@@ -31,8 +31,6 @@
             <div class="navbar-collapse collapse">
                 <ul class="nav navbar-nav">
                     <li><a href="{% url 'home' %}">Home</a></li>
-                    <li><a href="{% url 'about' %}">About</a></li>
-                    <li><a href="{% url 'contact' %}">Contact</a></li>
                     {% if app_is_admin %}<li><a href="{% url 'managezkusers' %}">Manage Users</a></li>{% endif %}
                 </ul>
                 {% include 'app/loginpartial.html' %}
@@ -54,7 +52,7 @@
     {% if user.is_authenticated %}
     <script>
         // Shared live token-status polling: refreshes every [data-token-key]
-        // cell from the live Zerodha API every 60 seconds.
+        // cell from the live Zerodha API every 10 minutes.
         (function () {
             var cells = document.querySelectorAll('[data-token-key]');
             if (!cells.length) { return; }
@@ -76,7 +74,7 @@
                     })
                     .catch(function () { /* ignore transient errors */ });
             }
-            setInterval(poll, 60000);
+            setInterval(poll, 600000);
         })();
     </script>
     {% endif %}

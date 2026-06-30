@@ -4,9 +4,17 @@
 
 <h2>{{ title }}</h2>
 
+{% if message %}
+<div class="alert alert-{{ message_type }} alert-dismissible" role="alert">
+    <button type="button" class="close" data-dismiss="alert">&times;</button>
+    {{ message }}
+</div>
+{% endif %}
+
 <h3>Add a new app login user</h3>
 <form action="" method="post" class="form-horizontal" style="max-width:520px;">
     {% csrf_token %}
+    <input type="hidden" name="action" value="add" />
     <div class="form-group">
         <label class="col-sm-3 control-label">Username</label>
         <div class="col-sm-9">{{ form.username }}
@@ -35,7 +43,7 @@
 
 <h3>App login users</h3>
 <table class="table table-striped">
-    <thead><tr><th>Username</th><th>Role</th></tr></thead>
+    <thead><tr><th>Username</th><th>Role</th><th>Actions</th></tr></thead>
     <tbody>
     {% for a in app_users %}
         <tr>
@@ -43,37 +51,148 @@
             <td>
                 <span class="label {% if a.is_admin %}label-warning{% elif a.is_trader_all %}label-success{% else %}label-info{% endif %}">{{ a.role_label }}</span>
             </td>
-        </tr>
-    {% empty %}
-        <tr><td colspan="2">No users.</td></tr>
-    {% endfor %}
-    </tbody>
-</table>
-
-<h3>Zerodha accounts</h3>
-<table class="table">
-    <thead>
-        <tr>
-            <th>App user</th><th>Zerodha user</th><th>API key</th>
-            <th>API secret</th><th>Access token</th><th>Token status</th>
-        </tr>
-    </thead>
-    <tbody>
-    {% for r in rows %}
-        <tr>
-            <td>{{ r.user.owner.username|default:"-" }}</td>
-            <td>{{ r.user.user_name|default:"(unauthenticated)" }}</td>
-            <td><code>{{ r.user.api_key }}</code></td>
-            <td><code style="word-break:break-all;">{{ r.user.api_secret|default:"-" }}</code></td>
-            <td><code style="word-break:break-all;">{{ r.user.access_token|default:"-" }}</code></td>
-            <td data-token-key="{{ r.user.api_key }}">
-                <span class="label {{ r.presentation.css }}">{{ r.presentation.label }}</span>
+            <td>
+                {% if not a.user.is_superuser %}
+                    <button type="button" class="btn btn-warning btn-xs" data-toggle="modal" data-target="#editModal{{ a.user.id }}">
+                        Edit
+                    </button>
+                    <button type="button" class="btn btn-danger btn-xs" data-toggle="modal" data-target="#deleteModal{{ a.user.id }}">
+                        Delete
+                    </button>
+                {% else %}
+                    <span class="text-muted">Superuser (cannot modify)</span>
+                {% endif %}
             </td>
         </tr>
     {% empty %}
-        <tr><td colspan="6">No stored accounts.</td></tr>
+        <tr><td colspan="3">No users.</td></tr>
     {% endfor %}
     </tbody>
 </table>
 
+<!-- Edit Modals -->
+{% for a in app_users %}
+    {% if not a.user.is_superuser %}
+    <div id="editModal{{ a.user.id }}" class="modal fade" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal">&times;</button>
+                    <h4 class="modal-title">Edit User: {{ a.user.username }}</h4>
+                </div>
+                <form action="" method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="edit" />
+                    <input type="hidden" name="user_id" value="{{ a.user.id }}" />
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label>Password (leave blank to keep current)</label>
+                            {{ a.edit_form.password }}
+                        </div>
+                        <div class="form-group">
+                            <label>Role</label>
+                            {{ a.edit_form.role }}
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save changes</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+{% endfor %}
+
+<!-- Delete Modals -->
+{% for a in app_users %}
+    {% if not a.user.is_superuser %}
+    <div id="deleteModal{{ a.user.id }}" class="modal fade" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal">&times;</button>
+                    <h4 class="modal-title">Confirm Delete</h4>
+                </div>
+                <form action="" method="post" onsubmit="return confirm('This will permanently delete user &quot;{{ a.user.username }}&quot; and all their ZK accounts. Continue?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="delete" />
+                    <input type="hidden" name="user_id" value="{{ a.user.id }}" />
+                    <div class="modal-body">
+                        <p>Are you sure you want to delete user <strong>{{ a.user.username }}</strong>?</p>
+                        <p class="text-danger"><strong>Warning:</strong> This will also delete all ZK accounts and credentials associated with this user.</p>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-danger">Delete User</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+{% endfor %}
+
+<h3>Zerodha authentication accounts</h3>
+<div class="table-responsive">
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>App user</th>
+                <th>Zerodha user</th>
+                <th>User ID</th>
+                <th>API key</th>
+                <th>API secret</th>
+                <th>Access token</th>
+                <th>Token status</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+            <tr>
+                <td><strong>{{ r.user.owner.username|default:"-" }}</strong></td>
+                <td>{{ r.user.user_name|default:"(unauthenticated)" }}</td>
+                <td>{{ r.user.user_id }}</td>
+                <td><code style="font-size:11px; word-break:break-all;">{{ r.user.api_key }}</code></td>
+                <td><code style="font-size:11px; word-break:break-all;">{{ r.user.api_secret|default:"-" }}</code></td>
+                <td><code style="font-size:11px; word-break:break-all;">{{ r.user.access_token|default:"-" }}</code></td>
+                <td data-token-key="{{ r.user.api_key }}">
+                    <span class="label {{ r.presentation.css }}">{{ r.presentation.label }}</span>
+                </td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="7"><em>No stored ZK accounts.</em></td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<script>
+    // Auto-refresh token statuses every 10 minutes
+    function refreshTokenStatuses() {
+        var apiKey = '';
+        var tokenKeys = document.querySelectorAll('[data-token-key]');
+        if (tokenKeys.length === 0) return;
+        
+        fetch('/token-statuses/')
+            .then(response => response.json())
+            .then(data => {
+                tokenKeys.forEach(function(el) {
+                    var key = el.dataset.tokenKey;
+                    if (data.statuses && data.statuses[key]) {
+                        var status = data.statuses[key];
+                        el.innerHTML = '<span class="label ' + status.css + '">' + status.label + '</span>';
+                    }
+                });
+            })
+            .catch(error => console.error('Error refreshing token statuses:', error));
+    }
+    
+    // Refresh on page load and then every 10 minutes
+    refreshTokenStatuses();
+    setInterval(refreshTokenStatuses, 600000);
+</script>
+
 {% endblock %}
+

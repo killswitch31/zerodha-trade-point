@@ -27,25 +27,41 @@
     {% endif %}
     {% if rows %}
     <h3>Stored users</h3>
+    <div style="margin-bottom:15px;">
+        <button type="button" class="btn btn-info" id="checkAccessTokenValidity">Check Access Token Validity</button>
+        <div id="accessTokenStatusCountdown" class="help-block" style="margin-top:8px;">Next status refresh in 600s</div>
+    </div>
     <table class="table">
-        <thead><tr><th>App user</th><th>Zerodha user</th><th>User ID</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>App user</th><th>Zerodha user</th><th>API key</th><th>API secret</th><th>Status</th><th>Action</th></tr></thead>
         <tbody>
         {% for r in rows %}
             <tr>
                 <td>{{ r.user.owner.username|default:"-" }}</td>
                 <td>{{ r.user.user_name|default:"(unauthenticated)" }}</td>
-                <td>{{ r.user.user_id }}</td>
+                <td>
+                    <span class="masked-value">••••••••••</span>
+                    <span class="real-value" style="display:none;">{{ r.user.api_key }}</span>
+                    <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
+                </td>
+                <td>
+                    {% if r.user.api_secret %}
+                        <span class="masked-value">••••••••••</span>
+                        <span class="real-value" style="display:none;">{{ r.user.api_secret }}</span>
+                        <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
+                    {% else %}
+                        <span class="text-muted">-</span>
+                    {% endif %}
+                </td>
                 <td data-token-key="{{ r.user.api_key }}">
                     <span class="label {{ r.presentation.css }}">{{ r.presentation.label }}</span>
                 </td>
                 <td>
-                    {% if r.status == 'expired_manual' %}
-                    <span class="text-muted">Re-enter bearer token below</span>
-                    {% elif r.status != 'active' %}
+                    {% if not r.user.manual_token and r.user.api_secret %}
                     <a href="{% url 'configurezkauth' %}?reauth={{ r.user.api_key }}" class="btn btn-warning btn-sm">Re-authenticate</a>
-                    {% endif %}
-                    {% if not r.user.manual_token and r.user.access_token %}
-                    <button type="button" class="btn btn-info btn-sm" onclick="showToken(this)" data-token="{{ r.user.access_token }}">Show token</button>
+                    {% elif r.user.manual_token %}
+                    <span class="text-muted">Manual token stored</span>
+                    {% else %}
+                    <span class="text-muted">No reauth available</span>
                     {% endif %}
                 </td>
             </tr>
@@ -57,7 +73,6 @@
     <h3>Configure Zerodha authentication</h3>
     <form action="" method="post" class="form-horizontal">
         {% csrf_token %}
-        <div class="form-group">{{ form.method }}</div>
         <div class="form-group">{{ form.api_key }}</div>
         <div class="form-group" id="secretField">{{ form.api_secret }}
             <p class="help-block">OAuth: you'll be redirected to Zerodha to authorize.</p>
@@ -66,23 +81,10 @@
                 <button type="button" class="btn btn-default btn-xs" onclick="copyRedirectUrl()">Copy</button>
             </p>
         </div>
-        <div class="form-group" id="tokenField">{{ form.access_token }}
-            <p class="help-block">Bearer: token used directly; not auto-reauthenticated on expiry.</p>
-        </div>
         <button type="submit" class="btn btn-primary">Authenticate</button>
         <a href="{% url 'home' %}" class="btn btn-default">Home</a>
     </form>
     <script>
-        (function () {
-            function sync() {
-                var m = document.querySelector('input[name=method]:checked');
-                var bearer = m && m.value === 'bearer';
-                document.getElementById('secretField').style.display = bearer ? 'none' : '';
-                document.getElementById('tokenField').style.display = bearer ? '' : 'none';
-            }
-            document.querySelectorAll('input[name=method]').forEach(function (r) { r.addEventListener('change', sync); });
-            sync();
-        })();
         function copyRedirectUrl() {
             var text = document.getElementById('redirectUrl').textContent;
             if (navigator.clipboard) {
@@ -95,25 +97,92 @@
                 document.execCommand('copy');
             }
         }
-    </script>
 
-    <div class="modal fade" id="tokenModal" tabindex="-1" role="dialog">
-        <div class="modal-dialog" role="document">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <button type="button" class="close" data-dismiss="modal">&times;</button>
-                    <h4 class="modal-title">Access token</h4>
-                </div>
-                <div class="modal-body"><code id="tokenText" style="word-break:break-all;"></code></div>
-                <div class="modal-footer"><button type="button" class="btn btn-primary" data-dismiss="modal">Close</button></div>
-            </div>
-        </div>
-    </div>
-    <script>
-        function showToken(b) {
-            document.getElementById('tokenText').textContent = b.dataset.token;
-            $('#tokenModal').modal('show');
+        function updateStatusCells(data) {
+            var statuses = data.statuses || {};
+            document.querySelectorAll('[data-token-key]').forEach(function (cell) {
+                var info = statuses[cell.getAttribute('data-token-key')];
+                if (!info) { return; }
+                var badge = cell.querySelector('.label');
+                if (!badge) { return; }
+                badge.className = 'label ' + info.css;
+                badge.textContent = info.label;
+            });
         }
+
+        function refreshTokenStatuses() {
+            var owner = new URLSearchParams(window.location.search).get('owner') || '';
+            var url = '{% url 'token_statuses' %}' + (owner ? ('?owner=' + encodeURIComponent(owner)) : '');
+            return fetch(url)
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    updateStatusCells(data);
+                    return true;
+                })
+                .catch(function () { return false; });
+        }
+
+        function toggleReveal(event) {
+            var button = event.currentTarget;
+            var td = button.closest('td');
+            if (!td) { return; }
+            var masked = td.querySelector('.masked-value');
+            var realValue = td.querySelector('.real-value');
+            if (!realValue || !masked) { return; }
+            if (realValue.style.display === 'none') {
+                realValue.style.display = 'inline';
+                masked.style.display = 'none';
+                button.textContent = 'Hide';
+            } else {
+                realValue.style.display = 'none';
+                masked.style.display = 'inline';
+                button.textContent = 'Reveal';
+            }
+        }
+
+        document.querySelectorAll('.reveal-btn').forEach(function (button) {
+            button.addEventListener('click', toggleReveal);
+        });
+
+        var checkButton = document.getElementById('checkAccessTokenValidity');
+        var countdownEl = document.getElementById('accessTokenStatusCountdown');
+        var countdown = 600;
+        var refreshInterval = 600;
+
+        function updateCountdown() {
+            if (!countdownEl) { return; }
+            countdownEl.textContent = 'Next status refresh in ' + countdown + 's';
+        }
+
+        function scheduleRefresh() {
+            updateCountdown();
+            setInterval(function () {
+                countdown = Math.max(0, countdown - 1);
+                if (countdown === 0) {
+                    refreshTokenStatuses().then(function () {
+                        countdown = refreshInterval;
+                        updateCountdown();
+                    });
+                } else {
+                    updateCountdown();
+                }
+            }, 1000);
+        }
+
+        if (checkButton) {
+            checkButton.addEventListener('click', function () {
+                refreshTokenStatuses().then(function () {
+                    countdown = refreshInterval;
+                    updateCountdown();
+                });
+            });
+        }
+
+        refreshTokenStatuses().then(function () {
+            countdown = refreshInterval;
+            updateCountdown();
+            scheduleRefresh();
+        });
     </script>
 {% endif %}
 

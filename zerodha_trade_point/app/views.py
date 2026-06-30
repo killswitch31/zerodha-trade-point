@@ -9,11 +9,11 @@ from django.http import HttpRequest, JsonResponse
 from django.urls import reverse
 from django.utils.http import urlencode
 from django.views.decorators.http import require_POST
-from django.contrib.auth.decorators import user_passes_test
+from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.models import User
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import KiteException, TokenException
-from app.forms import AddUserForm, ManageZkUserForm
+from app.forms import AddUserForm, ManageZkUserForm, EditAppUserForm
 from app.models import KiteUser, Profile
 
 # Per-process cache of instruments per exchange: {exchange: (timestamp, list)}.
@@ -62,6 +62,7 @@ admin_required = user_passes_test(is_admin, login_url='login')
 # Configuring accounts (add/re-auth/delete) is blocked for the trade-only role.
 account_config_required = user_passes_test(can_configure_accounts, login_url='login')
 
+@login_required(login_url='login')
 def home(request):
     """Renders the home page."""
     assert isinstance(request, HttpRequest)
@@ -70,32 +71,6 @@ def home(request):
         'app/index.html',
         {
             'title':'Home Page',
-            'year':datetime.now().year,
-        }
-    )
-
-def contact(request):
-    """Renders the contact page."""
-    assert isinstance(request, HttpRequest)
-    return render(
-        request,
-        'app/contact.html',
-        {
-            'title':'Contact',
-            'message':'Your contact page.',
-            'year':datetime.now().year,
-        }
-    )
-
-def about(request):
-    """Renders the about page."""
-    assert isinstance(request, HttpRequest)
-    return render(
-        request,
-        'app/about.html',
-        {
-            'title':'About',
-            'message':'Your application description page.',
             'year':datetime.now().year,
         }
     )
@@ -109,12 +84,54 @@ def _make_kite(api_key, access_token=None):
     return kite
 
 
+def _persist_token_data(user, data):
+    """Persists token/user fields returned by generate_session/renew APIs."""
+    changed = []
+    access_token = data.get('access_token')
+    refresh_token = data.get('refresh_token')
+    if access_token and access_token != user.access_token:
+        user.access_token = access_token
+        changed.append('access_token')
+    if refresh_token and refresh_token != user.refresh_token:
+        user.refresh_token = refresh_token
+        changed.append('refresh_token')
+    for field in ('user_id', 'user_name', 'email'):
+        if field in data and data.get(field) and data.get(field) != getattr(user, field):
+            setattr(user, field, data.get(field))
+            changed.append(field)
+    if changed:
+        user.save(update_fields=changed)
+
+
+def _renew_access_token(user):
+    """Renews access_token using stored refresh_token/api_secret."""
+    if not user.refresh_token or not user.api_secret:
+        return False
+    try:
+        data = _make_kite(user.api_key).renew_access_token(user.refresh_token, api_secret=user.api_secret)
+        _persist_token_data(user, data)
+        return bool(user.access_token)
+    except KiteException:
+        return False
+
+
+def _call_with_token_renewal(user, operation):
+    """Runs an API call and retries once after refresh-token renewal."""
+    kite = _make_kite(user.api_key, user.access_token)
+    try:
+        return operation(kite)
+    except TokenException:
+        if not _renew_access_token(user):
+            raise
+        return operation(_make_kite(user.api_key, user.access_token))
+
+
 def _auth_status(user):
     """Probes the stored token: 'active', 'expired' (token invalid), or 'error'."""
     if not user.access_token:
         return 'none'
     try:
-        _make_kite(user.api_key, user.access_token).profile()
+        _call_with_token_renewal(user, lambda kite: kite.profile())
         return 'active'
     except TokenException:
         # Kite returns 403 when the access token is invalid/expired.
@@ -160,25 +177,79 @@ def _user_rows(request_user, owner_filter=''):
 
 @admin_required
 def managezkusers(request):
-    """Admin-only: provision app login users and inspect all Kite accounts."""
+    """Admin-only: provision and manage app login users, and inspect all Kite accounts."""
     assert isinstance(request, HttpRequest)
+    message = None
+    message_type = None
+    
     if request.method == 'POST':
-        form = ManageZkUserForm(request.POST)
-        if form.is_valid():
-            new_user = User.objects.create_user(
-                username=form.cleaned_data['username'],
-                password=form.cleaned_data['password'],
-            )
-            # The ensure_profile signal already made a default self_only profile.
-            profile = new_user.profile
-            profile.role = form.cleaned_data['role']
-            profile.save()
-            return redirect('managezkusers')
-    else:
-        form = ManageZkUserForm()
-
+        action = request.POST.get('action', 'add')
+        
+        if action == 'delete':
+            # Delete user
+            user_id = request.POST.get('user_id')
+            try:
+                user = User.objects.get(id=user_id)
+                if user.is_superuser:
+                    message = 'Cannot delete superuser accounts.'
+                    message_type = 'danger'
+                else:
+                    username = user.username
+                    # Delete all KiteUser records for this user first
+                    user.kite_users.all().delete()
+                    user.delete()
+                    message = f'User "{username}" deleted successfully.'
+                    message_type = 'success'
+            except User.DoesNotExist:
+                message = 'User not found.'
+                message_type = 'danger'
+        
+        elif action == 'edit':
+            # Modify user password and role
+            user_id = request.POST.get('user_id')
+            form = EditAppUserForm(request.POST)
+            if form.is_valid():
+                try:
+                    user = User.objects.get(id=user_id)
+                    if user.is_superuser:
+                        message = 'Cannot modify superuser accounts.'
+                        message_type = 'danger'
+                    else:
+                        # Update password if provided
+                        if form.cleaned_data['password']:
+                            user.set_password(form.cleaned_data['password'])
+                        # Update role
+                        profile = user.profile
+                        profile.role = form.cleaned_data['role']
+                        profile.save()
+                        user.save()
+                        message = f'User "{user.username}" updated successfully.'
+                        message_type = 'success'
+                except User.DoesNotExist:
+                    message = 'User not found.'
+                    message_type = 'danger'
+        
+        else:
+            # Add new user
+            form = ManageZkUserForm(request.POST)
+            if form.is_valid():
+                new_user = User.objects.create_user(
+                    username=form.cleaned_data['username'],
+                    password=form.cleaned_data['password'],
+                )
+                # The ensure_profile signal already made a default self_only profile.
+                profile = new_user.profile
+                profile.role = form.cleaned_data['role']
+                profile.save()
+                message = f'User "{new_user.username}" created successfully.'
+                message_type = 'success'
+    
+    # Prepare forms for display
+    add_form = ManageZkUserForm()
+    
     # All Kite accounts (admins see everyone) with live token status.
     rows = _user_rows(request.user)
+    
     # Every app login user with their role (including those with no accounts).
     role_labels = dict(Profile.ROLE_CHOICES)
     app_users = []
@@ -195,21 +266,27 @@ def managezkusers(request):
             'role_label': label,
             'is_admin': is_admin_user,
             'is_trader_all': role == Profile.TRADER_ALL,
+            'role': role,
+            'edit_form': EditAppUserForm(initial={'role': role}) if not u.is_superuser else None,
         })
+    
     return render(request, 'app/managezkusers.html', {
         'title': 'Manage ZK Users',
         'year': datetime.now().year,
-        'form': form,
+        'form': add_form,
         'rows': rows,
         'app_users': app_users,
+        'message': message,
+        'message_type': message_type,
     })
 
 
+@login_required(login_url='login')
 def token_statuses(request):
     """JSON: live token status per api_key, scoped to the requesting user.
 
-    Polled by /configurezkauth, /trade and /deleteuser to refresh the displayed
-    access-token status from the live Zerodha API every 60 seconds.
+    Polled by /configurezkauth, /trade and /deletezkuser to refresh the displayed
+    access-token status from the live Zerodha API every 10 minutes.
     """
     owner_filter = request.GET.get('owner', '') if can_trade_all(request.user) else ''
     statuses = {}
@@ -227,6 +304,7 @@ def _owner_choices():
     return User.objects.filter(kite_users__isnull=False).distinct().order_by('username')
 
 
+@account_config_required
 @account_config_required
 def configurezkauth(request):
     """Lists stored users with auth status; adds or re-authenticates a user."""
@@ -248,29 +326,13 @@ def configurezkauth(request):
         form = AddUserForm(request.POST)
         if form.is_valid():
             api_key = form.cleaned_data['api_key']
-            if form.cleaned_data['method'] == 'bearer':
-                token = form.cleaned_data['access_token']
-                user, _ = KiteUser.objects.update_or_create(
-                    api_key=api_key,
-                    defaults={'access_token': token, 'manual_token': True, 'api_secret': '', 'owner': request.user},
-                )
-                try:
-                    prof = _make_kite(api_key, token).profile()
-                    user.user_id = prof.get('user_id', '')
-                    user.user_name = prof.get('user_name', '')
-                    user.email = prof.get('email', '')
-                    user.save()
-                    msg, ok = 'Bearer token accepted for {0}.'.format(user.user_name or api_key), True
-                except KiteException as ex:
-                    msg, ok = 'Bearer token invalid: {0}'.format(ex), False
-                return render(request, 'app/adduser.html', {
-                    'title': 'Configure ZK Auth', 'year': datetime.now().year,
-                    'form': AddUserForm(), 'result': True, 'success': ok, 'message': msg,
-                })
-            # OAuth flow: save key/secret then redirect to Kite login.
             KiteUser.objects.update_or_create(
                 api_key=api_key,
-                defaults={'api_secret': form.cleaned_data['api_secret'], 'manual_token': False, 'owner': request.user},
+                defaults={
+                    'api_secret': form.cleaned_data['api_secret'],
+                    'manual_token': False,
+                    'owner': request.user,
+                },
             )
             request.session['pending_api_key'] = api_key
             kite = _make_kite(api_key)
@@ -294,6 +356,7 @@ def configurezkauth(request):
     )
 
 
+@login_required(login_url='login')
 def kite_callback(request):
     """Handles the Kite redirect, exchanges request_token for an access_token."""
     assert isinstance(request, HttpRequest)
@@ -313,11 +376,7 @@ def kite_callback(request):
             user = KiteUser.objects.get(api_key=api_key)
             kite = _make_kite(user.api_key)
             data = kite.generate_session(request_token, api_secret=user.api_secret)
-            user.access_token = data['access_token']
-            user.user_id = data.get('user_id', '')
-            user.user_name = data.get('user_name', '')
-            user.email = data.get('email', '')
-            user.save()
+            _persist_token_data(user, data)
             success = True
             message = 'Authentication succeeded for {0}.'.format(user.user_name or user.user_id)
         except KiteUser.DoesNotExist:
@@ -339,6 +398,113 @@ def kite_callback(request):
     )
 
 
+def _scalar_value(value):
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value) if value.isdigit() else float(value)
+        except ValueError:
+            return value
+    if isinstance(value, dict):
+        for subkey in ('value', 'amount', 'used', 'utilised', 'utilized', 'margin_used', 'net', 'live_balance', 'available'):
+            if subkey in value and value[subkey] is not None:
+                return _scalar_value(value[subkey])
+    if isinstance(value, list) and value:
+        return _scalar_value(value[0])
+    return None
+
+
+def _calculate_margin_used(margins):
+    equity = margins.get('equity', {}) if isinstance(margins, dict) else {}
+    for key in ('utilised', 'used', 'utilized', 'margin_used'):
+        if key in equity and equity[key] is not None:
+            return _scalar_value(equity[key])
+    return None
+
+
+def _normalize_position(position):
+    if not isinstance(position, dict):
+        return position
+    quantity = position.get('quantity')
+    if quantity is None:
+        quantity = position.get('net_quantity') or position.get('day_buy_quantity') or position.get('day_sell_quantity') or position.get('sell_quantity') or position.get('buy_quantity')
+    average_price = position.get('average_price') or position.get('avg_price') or position.get('price') or position.get('last_price')
+    normalized = dict(position)
+    normalized['quantity'] = _scalar_value(quantity)
+    normalized['average_price'] = _scalar_value(average_price)
+    return normalized
+
+
+def _get_trade_user(api_key, request_user):
+    qs = KiteUser.objects.exclude(access_token='')
+    if not can_trade_all(request_user):
+        qs = qs.filter(owner=request_user)
+    return qs.filter(api_key=api_key).first()
+
+
+def _trade_data_for_user(user):
+    def _fetch(kite):
+        profile = kite.profile()
+        orders = kite.orders()
+        margins = kite.margins()
+        holdings = kite.holdings()
+        positions = kite.positions()
+        return profile, orders, margins, holdings, positions
+
+    profile, orders, margins, holdings, positions = _call_with_token_renewal(user, _fetch)
+    if isinstance(positions, dict):
+        positions = positions.get('net', [])
+    positions = [_normalize_position(p) for p in positions]
+    equity = margins.get('equity', {}) if isinstance(margins, dict) else {}
+    available = equity.get('available', {}) if isinstance(equity.get('available', {}), dict) else {}
+    live_balance = available.get('live_balance')
+    cash_balance = available.get('cash')
+    available_balance = available.get('available')
+    balance = _scalar_value(
+        live_balance if live_balance is not None else
+        cash_balance if cash_balance is not None else
+        available_balance
+    )
+    net_margin = equity.get('net')
+    available_net = available.get('net')
+    margin = _scalar_value(
+        net_margin if net_margin is not None else
+        available_net if available_net is not None else
+        equity.get('available')
+    )
+    return {
+        'profile': profile,
+        'open_orders': [o for o in orders if o.get('status') == 'OPEN'],
+        'executed_orders': [o for o in orders if o.get('status') == 'COMPLETE'],
+        'cancelled_orders': [o for o in orders if o.get('status') == 'CANCELLED'],
+        'holdings': holdings,
+        'positions': positions,
+        'holdings_pnl': sum(_scalar_value(h.get('pnl', 0)) or 0 for h in holdings),
+        'positions_pnl': sum(_scalar_value(p.get('pnl', 0)) or 0 for p in positions),
+        'balance': balance,
+        'margin': margin,
+        'margin_used': _calculate_margin_used(margins),
+    }
+
+
+def _empty_trade_data():
+    return {
+        'profile': None,
+        'open_orders': [],
+        'executed_orders': [],
+        'cancelled_orders': [],
+        'holdings': [],
+        'positions': [],
+        'holdings_pnl': 0,
+        'positions_pnl': 0,
+        'balance': None,
+        'margin': None,
+        'margin_used': None,
+    }
+
+
+@login_required(login_url='login')
 def trade(request):
     """Shows trading data for a selected authenticated user."""
     assert isinstance(request, HttpRequest)
@@ -352,6 +518,7 @@ def trade(request):
         'year': datetime.now().year,
         'users': users,
         'selected': selected,
+        'trade_all': trade_all,
         'banner': request.GET.get('msg', ''),
         'banner_level': 'success' if request.GET.get('level') == 'success' else 'danger',
     }
@@ -361,33 +528,52 @@ def trade(request):
             context['error'] = 'Not authorized for this account.'
             return render(request, 'app/trade.html', context)
         context['selected_status'] = _status_presentation(_auth_status(user))
-        kite = _make_kite(user.api_key, user.access_token)
         try:
-            profile = kite.profile()
-            orders = kite.orders()
-            margins = kite.margins()
-            holdings = kite.holdings()
-            positions = kite.positions().get('net', [])
-            context.update({
-                'profile': profile,
-                'open_orders': [o for o in orders if o.get('status') == 'OPEN'],
-                'executed_orders': [o for o in orders if o.get('status') == 'COMPLETE'],
-                'cancelled_orders': [o for o in orders if o.get('status') == 'CANCELLED'],
-                'holdings': holdings,
-                'positions': positions,
-                'holdings_pnl': sum(h.get('pnl', 0) for h in holdings),
-                'positions_pnl': sum(p.get('pnl', 0) for p in positions),
-                'balance': margins.get('equity', {}).get('available', {}).get('live_balance'),
-                'margin': margins.get('equity', {}).get('net'),
-            })
-        except KiteException as ex:
-            context['error'] = 'Could not load data (token may be expired): {0}'.format(ex)
+            context.update(_trade_data_for_user(user))
+        except KiteException:
+            context.update(_empty_trade_data())
     return render(request, 'app/trade.html', context)
 
 
+@login_required(login_url='login')
+def trade_refresh_data(request):
+    api_key = request.GET.get('api_key', '')
+    selected_api_key = request.GET.get('selected_api_key', '')
+    if api_key == 'all':
+        if not can_trade_all(request.user):
+            return JsonResponse({'error': 'Not authorized to refresh all accounts.'}, status=403)
+        users = KiteUser.objects.exclude(access_token='').select_related('owner').order_by('user_name')
+        for user in users:
+            try:
+                _trade_data_for_user(user)
+            except KiteException:
+                pass
+        if not selected_api_key:
+            return JsonResponse({'error': 'Missing selected_api_key for current trade view.'}, status=400)
+        kite_user = _get_trade_user(selected_api_key, request.user)
+        if not kite_user:
+            return JsonResponse({'error': 'Selected user not authorized or not found.'}, status=403)
+    else:
+        if not api_key:
+            return JsonResponse({'error': 'Missing api_key.'}, status=400)
+        kite_user = _get_trade_user(api_key, request.user)
+        if not kite_user:
+            return JsonResponse({'error': 'Not authorized or user not found.'}, status=403)
+    try:
+        data = _trade_data_for_user(kite_user)
+    except KiteException:
+        data = _empty_trade_data()
+    data['selected_status'] = _status_presentation(_auth_status(kite_user))
+    data['api_key'] = kite_user.api_key
+    return JsonResponse(data)
+
+
 @account_config_required
-def deleteuser(request):
-    """Lists stored users and deletes the selected one (this app's DB only)."""
+def deletezkuser(request):
+    """Lists stored users and deletes the selected one (this app's DB only).
+    
+    Only admin users can delete any user; self_only users can only delete their own.
+    """
     assert isinstance(request, HttpRequest)
     admin = is_admin(request.user)
     if request.method == 'POST':
@@ -395,13 +581,13 @@ def deleteuser(request):
         if not admin:
             qs = qs.filter(owner=request.user)
         qs.filter(api_key=request.POST.get('api_key', '')).delete()
-        return redirect('deleteuser')
+        return redirect('deletezkuser')
     owner_filter = request.GET.get('owner', '') if admin else ''
     return render(
         request,
         'app/deleteuser.html',
         {
-            'title': 'Delete User',
+            'title': 'Delete ZK User',
             'year': datetime.now().year,
             'rows': _user_rows(request.user, owner_filter),
             'is_admin': admin,
@@ -422,6 +608,14 @@ def _user_kite(api_key, request_user=None):
     user = qs.first()
     if not user:
         return None
+    try:
+        _call_with_token_renewal(user, lambda kite: kite.profile())
+    except TokenException:
+        return None
+    except KiteException:
+        # Non-token errors (for example, transient network issues) should not
+        # block the caller; the endpoint will handle the downstream error.
+        pass
     return _make_kite(user.api_key, user.access_token)
 
 
@@ -441,6 +635,7 @@ def _get_instruments(kite, exchange):
     return data
 
 
+@login_required(login_url='login')
 def instruments_search(request):
     """JSON: best-match tradingsymbols for a query on an exchange."""
     kite = _user_kite(request.GET.get('api_key', ''), request.user)
@@ -459,6 +654,7 @@ def instruments_search(request):
     return JsonResponse({'results': results})
 
 
+@login_required(login_url='login')
 def instruments_all(request):
     """JSON: full NSE+BSE symbol list for client-side autocomplete (cached)."""
     kite = _user_kite(request.GET.get('api_key', ''), request.user)
@@ -473,6 +669,7 @@ def instruments_all(request):
     return JsonResponse({'results': out})
 
 
+@login_required(login_url='login')
 def quote(request):
     """JSON: last price and upper/lower circuit for an exchange:symbol."""
     kite = _user_kite(request.GET.get('api_key', ''), request.user)
@@ -530,6 +727,7 @@ def _place(kite, p):
 
 
 @require_POST
+@login_required(login_url='login')
 def trade_place(request):
     """Places a new order for the selected user."""
     api_key = request.POST.get('api_key', '')
@@ -544,6 +742,7 @@ def trade_place(request):
 
 
 @require_POST
+@login_required(login_url='login')
 def trade_cancel(request):
     """Cancels an open order."""
     api_key = request.POST.get('api_key', '')
@@ -559,6 +758,7 @@ def trade_cancel(request):
 
 
 @require_POST
+@login_required(login_url='login')
 def trade_modify(request):
     """Modifies an open order; exchange change = cancel and re-place."""
     p = request.POST

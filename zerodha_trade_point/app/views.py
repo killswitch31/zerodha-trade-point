@@ -415,12 +415,61 @@ def _scalar_value(value):
     return None
 
 
-def _calculate_margin_used(margins):
-    equity = margins.get('equity', {}) if isinstance(margins, dict) else {}
-    for key in ('utilised', 'used', 'utilized', 'margin_used'):
-        if key in equity and equity[key] is not None:
-            return _scalar_value(equity[key])
+def _sum_numeric_values(value):
+    """Recursively sums numeric values from nested dict/list payloads."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    if isinstance(value, dict):
+        total = 0.0
+        found = False
+        for item in value.values():
+            amount = _sum_numeric_values(item)
+            if amount is not None:
+                total += amount
+                found = True
+        return total if found else None
+    if isinstance(value, list):
+        total = 0.0
+        found = False
+        for item in value:
+            amount = _sum_numeric_values(item)
+            if amount is not None:
+                total += amount
+                found = True
+        return total if found else None
     return None
+
+
+def _calculate_margin_used(margins):
+    if not isinstance(margins, dict):
+        return None
+
+    segments = []
+    for segment_name in ('equity', 'commodity'):
+        segment = margins.get(segment_name)
+        if isinstance(segment, dict):
+            segments.append(segment)
+    if not segments:
+        segments = [margins]
+
+    total_used = 0.0
+    found = False
+    for segment in segments:
+        segment_used = None
+        for key in ('utilised', 'utilized', 'used', 'margin_used'):
+            if key in segment and segment[key] is not None:
+                segment_used = _sum_numeric_values(segment[key])
+                break
+        if segment_used is not None:
+            total_used += segment_used
+            found = True
+
+    return round(total_used, 2) if found else None
 
 
 def _normalize_position(position):

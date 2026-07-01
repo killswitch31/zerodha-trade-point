@@ -42,11 +42,8 @@
                 <th>ID</th>
                 <th>Zerodha Username</th>
                 <th>Zerodha User ID</th>
-                <th>Zerodha Password</th>
-                <th>Zerodha TOTP Key</th>
                 <th>API Key</th>
                 <th>API Secret</th>
-                <th>Automate</th>
                 <th>Token Status</th>
                 <th>Action</th>
             </tr>
@@ -59,16 +56,6 @@
                 <td>{{ r.user.user_name|default:"(pending profile sync)" }}</td>
                 <td>{{ r.user.user_id|default:"-" }}</td>
                 <td>
-                    <span class="masked-value">••••••••••</span>
-                    <span class="real-value" style="display:none;">{{ r.user.zerodha_password|default:"-" }}</span>
-                    <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
-                </td>
-                <td>
-                    <span class="masked-value">••••••••••</span>
-                    <span class="real-value" style="display:none;">{{ r.user.zerodha_totp_key|default:"-" }}</span>
-                    <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
-                </td>
-                <td>
                     {% if r.user.api_key %}
                     <code style="font-size:11px; word-break:break-all;">{{ r.user.api_key }}</code>
                     {% else %}
@@ -80,7 +67,6 @@
                     <span class="real-value" style="display:none;">{{ r.user.api_secret|default:"-" }}</span>
                     <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
                 </td>
-                <td>{{ r.user.automate }}</td>
                 <td data-token-key="{{ r.user.zk_user_id }}">
                     <span class="label {{ r.presentation.css }}">{{ r.presentation.label }}</span>
                     <div class="help-block" style="margin:4px 0 0 0; font-size:11px;" data-token-checked-at>
@@ -88,43 +74,30 @@
                     </div>
                 </td>
                 <td>
+                    {% if r.user.api_key and r.user.api_secret %}
                     <a href="{% url 'configurezkauth' %}?reauth={{ r.user.zk_user_id }}" class="btn btn-warning btn-sm">Re-authenticate</a>
+                    {% else %}
+                    <span class="text-muted">Needs API key + secret</span>
+                    {% endif %}
                     <button type="button" class="btn btn-primary btn-sm" onclick="toggleEditRow('{{ r.user.zk_user_id }}')">Edit</button>
                 </td>
             </tr>
             <tr id="editRow-{{ r.user.zk_user_id }}" style="display:none; background:#fafafa;">
-                <td colspan="11">
+                <td colspan="8">
                     <form method="post" class="form-horizontal" style="margin-bottom:0;">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="edit_credentials" />
                         <input type="hidden" name="zk_user_id" value="{{ r.user.zk_user_id }}" />
                         <div class="row" style="margin:0;">
-                            <div class="col-sm-2" style="padding:0 10px 8px 0;">
+                            <div class="col-sm-4" style="padding:0 10px 8px 0;">
                                 <label>API KEY</label>
                                 <input type="text" name="api_key" class="form-control" value="{{ r.user.api_key|default:'' }}" />
                                 <label class="checkbox-inline" style="margin-top:4px;"><input type="checkbox" name="clear_api_key" value="1" /> Clear</label>
                             </div>
-                            <div class="col-sm-2" style="padding:0 10px 8px 0;">
+                            <div class="col-sm-4" style="padding:0 10px 8px 0;">
                                 <label>API Secret</label>
                                 <input type="password" name="api_secret" class="form-control" placeholder="Leave blank to keep current" />
                                 <label class="checkbox-inline" style="margin-top:4px;"><input type="checkbox" name="clear_api_secret" value="1" /> Clear</label>
-                            </div>
-                            <div class="col-sm-2" style="padding:0 10px 8px 0;">
-                                <label>Zerodha Password</label>
-                                <input type="password" name="zerodha_password" class="form-control" placeholder="Leave blank to keep current" />
-                                <label class="checkbox-inline" style="margin-top:4px;"><input type="checkbox" name="clear_zerodha_password" value="1" /> Clear</label>
-                            </div>
-                            <div class="col-sm-2" style="padding:0 10px 8px 0;">
-                                <label>Zerodha TOTP KEY</label>
-                                <input type="password" name="zerodha_totp_key" class="form-control" placeholder="Leave blank to keep current" />
-                                <label class="checkbox-inline" style="margin-top:4px;"><input type="checkbox" name="clear_zerodha_totp_key" value="1" /> Clear</label>
-                            </div>
-                            <div class="col-sm-2" style="padding:0 10px 8px 0;">
-                                <label>Automate</label>
-                                <select name="automate" class="form-control">
-                                    <option value="0" {% if r.user.automate == 0 %}selected{% endif %}>0</option>
-                                    <option value="1" {% if r.user.automate == 1 %}selected{% endif %}>1</option>
-                                </select>
                             </div>
                         </div>
                         <button type="submit" class="btn btn-success btn-sm">Save</button>
@@ -149,23 +122,6 @@
         <div class="form-group" id="secretField">
             {{ form.api_secret }}
             {% if form.api_secret.errors %}<div class="text-danger">{{ form.api_secret.errors|join:", " }}</div>{% endif %}
-        </div>
-        <div class="form-group">
-            <label>Automate Daily Login</label>
-            {{ form.automate }}
-            {% if form.automate.errors %}<div class="text-danger">{{ form.automate.errors|join:", " }}</div>{% endif %}
-        </div>
-        <div id="automationFields" style="display:none;">
-            <div class="form-group">
-                <label>Zerodha Password</label>
-                {{ form.zerodha_password }}
-                {% if form.zerodha_password.errors %}<div class="text-danger">{{ form.zerodha_password.errors|join:", " }}</div>{% endif %}
-            </div>
-            <div class="form-group">
-                <label>Zerodha TOTP KEY</label>
-                {{ form.zerodha_totp_key }}
-                {% if form.zerodha_totp_key.errors %}<div class="text-danger">{{ form.zerodha_totp_key.errors|join:", " }}</div>{% endif %}
-            </div>
         </div>
         <div class="form-group">
             <p class="help-block">OAuth uses API Key/API Secret with Zerodha redirect authorization.</p>
@@ -246,19 +202,6 @@
         document.querySelectorAll('.reveal-btn').forEach(function (button) {
             button.addEventListener('click', toggleReveal);
         });
-
-        function updateAutomationFields() {
-            var automateField = document.getElementById('id_automate');
-            var automationFields = document.getElementById('automationFields');
-            if (!automateField || !automationFields) { return; }
-            automationFields.style.display = automateField.value === '1' ? 'block' : 'none';
-        }
-
-        var automateField = document.getElementById('id_automate');
-        if (automateField) {
-            automateField.addEventListener('change', updateAutomationFields);
-            updateAutomationFields();
-        }
 
         var checkButton = document.getElementById('checkAccessTokenValidity');
         var countdownEl = document.getElementById('accessTokenStatusCountdown');

@@ -3,16 +3,12 @@ Definition of views.
 """
 
 import time
-import requests
-import pyotp
-import json
 from datetime import datetime
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpRequest, JsonResponse
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import urlencode
-from urllib.parse import parse_qs, urlparse
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.models import User
@@ -193,83 +189,9 @@ def _sync_profile_from_kite(user):
 
 
 def _kite_login_url(api_key):
-    """Returns the Zerodha OAuth URL with a normalized host.
-
-    Some SDK/runtime combinations produce kite.trade links. For consistency in
-    this app, normalize those to kite.zerodha.com and use one URL source for
-    both automate=0 and automate=1 flows.
-    """
+    """Returns the Zerodha OAuth URL with a normalized host."""
     url = _make_kite(api_key).login_url()
     return url.replace('https://kite.trade/', 'https://kite.zerodha.com/')
-
-
-def _automated_kite_login(user):
-    """Performs non-interactive Zerodha login + 2FA flow and stores new token."""
-    login_user_id = (user.user_id or user.user_name or '').strip()
-    if not (user.automate and user.zerodha_password and user.zerodha_totp_key and login_user_id):
-        raise ValueError('Automation requires Zerodha user ID/username, password and TOTP key.')
-    session = requests.Session()
-    login_url = _kite_login_url(user.api_key)
-    initial_response = session.get(login_url, timeout=20)
-    login_page_url = initial_response.url
-    login_response = session.post(
-        'https://kite.zerodha.com/api/login',
-        data={'user_id': login_user_id, 'password': user.zerodha_password},
-        timeout=20,
-    )
-    try:
-        login_payload = json.loads(login_response.content)
-    except ValueError:
-        raise ValueError('Login failed: unexpected response from Zerodha login API.')
-    request_id = ((login_payload.get('data') or {}).get('request_id'))
-    if not request_id:
-        raise ValueError('Login failed while submitting Zerodha credentials: {0}'.format(login_payload.get('message', 'request_id missing')))
-    normalized_totp_key = ''.join((user.zerodha_totp_key or '').split())
-    current_totp = pyotp.TOTP(normalized_totp_key).now()
-    twofa_response = session.post(
-        'https://kite.zerodha.com/api/twofa',
-        data={
-            'user_id': login_user_id,
-            'request_id': request_id,
-            'twofa_value': current_totp,
-        },
-        timeout=20,
-    )
-    try:
-        twofa_payload = twofa_response.json()
-    except ValueError:
-        raise ValueError('2FA failed: unexpected response from Zerodha 2FA API.')
-    if twofa_payload.get('status') != 'success':
-        raise ValueError('2FA failed while automating Zerodha login: {0}'.format(twofa_payload.get('message', 'unknown error')))
-    final_response = session.get(login_page_url, allow_redirects=True, timeout=20)
-    if 'request_token' not in final_response.url:
-        raise ValueError('Unable to obtain request token from Zerodha redirect URL.')
-    request_token = parse_qs(urlparse(final_response.url).query)['request_token'][0]
-    kite = _make_kite(user.api_key)
-    session_data = kite.generate_session(request_token, api_secret=user.api_secret)
-    _persist_token_data(user, session_data)
-    try:
-        _sync_profile_from_kite(user)
-    except (KiteException, TokenException):
-        # Keep auth successful when token acquisition worked; profile sync can be retried later.
-        pass
-
-
-def _is_automate_enabled(user):
-    """Returns True only when automate is explicitly set to 1."""
-    try:
-        return int(getattr(user, 'automate', 0)) == 1
-    except (TypeError, ValueError):
-        return False
-
-
-def _start_reauthentication(request, user):
-    """Starts manual OAuth or executes automated auth depending on the user mode."""
-    if _is_automate_enabled(user):
-        _automated_kite_login(user)
-        return None
-    request.session['pending_zk_user_id'] = user.zk_user_id
-    return _kite_login_url(user.api_key)
 
 
 @admin_required
@@ -409,7 +331,7 @@ def _owner_choices():
 
 @account_config_required
 def configurezkauth(request):
-    """Lists configured Zerodha users; adds and authenticates via manual or automated flow."""
+    """Lists configured Zerodha users; adds and re-authenticates via OAuth."""
     assert isinstance(request, HttpRequest)
     owner_filter = request.GET.get('owner', '') if is_admin(request.user) else ''
     context = {
@@ -429,39 +351,21 @@ def configurezkauth(request):
             return redirect('configurezkauth')
         if not user.api_key or not user.api_secret:
             return redirect('configurezkauth')
-        try:
-            next_url = _start_reauthentication(request, user)
-            if next_url:
-                return redirect(next_url)
-            context['success'] = True
-            context['result'] = True
-            context['message'] = 'Authentication succeeded for {0}.'.format(user.user_name or user.user_id or user.zk_user_id)
-        except Exception as ex:
-            context['success'] = False
-            context['result'] = True
-            context['message'] = 'Authentication failed: {0}'.format(ex)
-        context['form'] = AddUserForm()
-        context['rows'] = _user_rows(request.user, owner_filter)
-        return render(request, 'app/adduser.html', context)
+        request.session['pending_zk_user_id'] = user.zk_user_id
+        return redirect(_kite_login_url(user.api_key))
 
     if request.method == 'POST':
         if request.POST.get('action') == 'edit_credentials':
             edit_form = EditKiteCredentialsForm(request.POST)
             if edit_form.is_valid():
-                zk_user_id = edit_form.cleaned_data['zk_user_id']
-                user = get_object_or_404(KiteUser, zk_user_id=zk_user_id)
+                user = get_object_or_404(KiteUser, zk_user_id=edit_form.cleaned_data['zk_user_id'])
                 if not is_admin(request.user) and user.owner_id != request.user.id:
                     return redirect('configurezkauth')
 
                 new_api_key = (edit_form.cleaned_data.get('api_key') or '').strip()
                 new_api_secret = (edit_form.cleaned_data.get('api_secret') or '').strip()
-                new_password = (edit_form.cleaned_data.get('zerodha_password') or '').strip()
-                new_totp = (edit_form.cleaned_data.get('zerodha_totp_key') or '').strip()
-                new_automate = edit_form.cleaned_data.get('automate')
                 clear_api_key = edit_form.cleaned_data.get('clear_api_key')
                 clear_api_secret = edit_form.cleaned_data.get('clear_api_secret')
-                clear_password = edit_form.cleaned_data.get('clear_zerodha_password')
-                clear_totp = edit_form.cleaned_data.get('clear_zerodha_totp_key')
                 token_binding_changed = False
 
                 if clear_api_key:
@@ -486,23 +390,13 @@ def configurezkauth(request):
                 elif new_api_secret:
                     user.api_secret = new_api_secret
                     token_binding_changed = True
-                if clear_password:
-                    user.zerodha_password = ''
-                elif new_password:
-                    user.zerodha_password = new_password
-                if clear_totp:
-                    user.zerodha_totp_key = ''
-                elif new_totp:
-                    user.zerodha_totp_key = new_totp
-                if new_automate in (0, 1):
-                    user.automate = new_automate
 
                 if token_binding_changed:
                     user.access_token = ''
                     user.refresh_token = ''
 
                 user.save()
-                context['page_message'] = 'Zerodha credentials updated successfully for {0}.'.format(user.zk_user_id)
+                context['page_message'] = 'API credentials updated successfully for {0}.'.format(user.zk_user_id)
                 context['page_message_type'] = 'success'
             else:
                 context['page_message'] = 'Invalid edit request. Please review the entered fields.'
@@ -527,30 +421,15 @@ def configurezkauth(request):
                 defaults={
                     'api_secret': cleaned['api_secret'],
                     'manual_token': False,
-                    'automate': cleaned['automate'],
-                    'zerodha_password': cleaned.get('zerodha_password', ''),
-                    'zerodha_totp_key': cleaned.get('zerodha_totp_key', ''),
-                    # Zerodha username field must be populated and overwritten from /user/profile when available.
+                    # user_name is bootstrapped from the form and later overwritten from /user/profile.
                     'user_name': cleaned['zerodha_username'],
-                    # User ID starts from form username so automated login can run before first profile sync.
-                    'user_id': cleaned['zerodha_username'],
+                    # user_id is populated/overwritten by /user/profile after auth callback.
+                    'user_id': '',
                     'owner': request.user,
                 }
             )
-            try:
-                next_url = _start_reauthentication(request, user)
-                if next_url:
-                    return redirect(next_url)
-                context['success'] = True
-                context['result'] = True
-                context['message'] = 'User added and authentication completed for {0}.'.format(user.user_name or user.user_id or user.zk_user_id)
-            except Exception as ex:
-                context['success'] = False
-                context['result'] = True
-                context['message'] = 'User added, but authentication failed: {0}'.format(ex)
-            context['form'] = AddUserForm()
-            context['rows'] = _user_rows(request.user, owner_filter)
-            return render(request, 'app/adduser.html', context)
+            request.session['pending_zk_user_id'] = user.zk_user_id
+            return redirect(_kite_login_url(user.api_key))
     else:
         form = AddUserForm()
     context['form'] = form

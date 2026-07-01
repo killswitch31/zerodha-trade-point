@@ -5,9 +5,10 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.test import TestCase, RequestFactory
 from django.urls import reverse
+from kiteconnect.exceptions import KiteException
 from app.forms import AddUserForm
 from app.models import KiteUser
-from app.views import token_statuses, configurezkauth, _kite_login_url
+from app.views import token_statuses, configurezkauth, _kite_login_url, trade, _place, trade_modify
 
 
 class AddUserFormTests(TestCase):
@@ -194,3 +195,154 @@ class KiteLoginUrlNormalizationTests(TestCase):
         mock_make_kite.return_value = _MockKite()
         url = _kite_login_url('abc')
         self.assertEqual(url, 'https://example.com/connect/login?v=3&api_key=abc')
+
+
+class TradePageRenderingTests(TestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='trade-owner', password='trade-pass')
+        self.kite_user = KiteUser.objects.create(
+            owner=self.user,
+            api_key='trade-api',
+            api_secret='trade-secret',
+            access_token='trade-token',
+            user_name='Trade Kite',
+            user_id='TR1234',
+        )
+
+    @patch('app.views._auth_status', return_value='expired')
+    @patch('app.views._trade_data_for_user', side_effect=KiteException('temporary failure'))
+    def test_trade_sections_render_even_when_initial_fetch_fails(self, _mock_trade_data, _mock_auth_status):
+        request = self.factory.get(reverse('trade') + '?api_key=' + self.kite_user.api_key)
+        request.user = self.user
+
+        response = trade(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="holdingsTable"')
+        self.assertContains(response, 'id="positionsTable"')
+        self.assertContains(response, 'id="openOrdersTable"')
+
+
+class MarketProtectionTests(TestCase):
+    class _KiteStub:
+        def __init__(self, quote_payload):
+            self.quote_payload = quote_payload
+            self.last_place_kwargs = None
+
+        def quote(self, key):
+            return {key: self.quote_payload}
+
+        def place_order(self, **kwargs):
+            self.last_place_kwargs = kwargs
+            return 'order-1'
+
+    def test_market_order_sets_market_protection_to_one(self):
+        kite = self._KiteStub({
+            'last_price': 100,
+            'circuit_limit': {'lower': 90, 'upper': 110},
+        })
+        order_id = _place(kite, {
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY',
+            'quantity': '1',
+            'product': 'CNC',
+            'order_type': 'MARKET',
+        })
+
+        self.assertEqual(order_id, 'order-1')
+        self.assertEqual(kite.last_place_kwargs.get('market_protection'), 1)
+
+    def test_limit_order_does_not_send_market_protection(self):
+        kite = self._KiteStub({
+            'last_price': 100,
+            'circuit_limit': {'lower': 90, 'upper': 110},
+        })
+        order_id = _place(kite, {
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY',
+            'quantity': '1',
+            'product': 'CNC',
+            'order_type': 'LIMIT',
+            'price': '100',
+        })
+
+        self.assertEqual(order_id, 'order-1')
+        self.assertNotIn('market_protection', kite.last_place_kwargs)
+
+    def test_limit_order_requires_price(self):
+        kite = self._KiteStub({
+            'last_price': 100,
+            'circuit_limit': {'lower': 90, 'upper': 110},
+        })
+        with self.assertRaises(ValueError):
+            _place(kite, {
+                'exchange': 'NSE',
+                'tradingsymbol': 'INFY',
+                'transaction_type': 'BUY',
+                'quantity': '1',
+                'product': 'CNC',
+                'order_type': 'LIMIT',
+            })
+
+
+class TradeModifyComplianceTests(TestCase):
+    class _KiteModifyStub:
+        def __init__(self):
+            self.modify_kwargs = None
+
+        def modify_order(self, **kwargs):
+            self.modify_kwargs = kwargs
+
+        def cancel_order(self, **kwargs):
+            return None
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='modify-owner', password='modify-pass')
+
+    @patch('app.views._user_kite')
+    def test_modify_market_sets_market_protection_one(self, mock_user_kite):
+        kite = self._KiteModifyStub()
+        mock_user_kite.return_value = kite
+
+        request = self.factory.post(reverse('trade_modify'), {
+            'api_key': 'k',
+            'order_id': 'OID1',
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY',
+            'quantity': '2',
+            'order_type': 'MARKET',
+        })
+        request.user = self.user
+
+        response = trade_modify(request)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(kite.modify_kwargs.get('market_protection'), 1)
+        self.assertNotIn('price', kite.modify_kwargs)
+
+    @patch('app.views._user_kite')
+    def test_modify_limit_requires_price(self, mock_user_kite):
+        kite = self._KiteModifyStub()
+        mock_user_kite.return_value = kite
+
+        request = self.factory.post(reverse('trade_modify'), {
+            'api_key': 'k',
+            'order_id': 'OID2',
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY',
+            'quantity': '2',
+            'order_type': 'LIMIT',
+            'price': '',
+        })
+        request.user = self.user
+
+        response = trade_modify(request)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNone(kite.modify_kwargs)

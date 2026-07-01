@@ -37,9 +37,24 @@
 </div>
 {% endif %}
 
-{% if profile %}
+{% if selected %}
 <hr/>
-<h3>{{ profile.user_name }} &mdash; {{ profile.email }}</h3>
+<h3>
+    {% if profile and profile.user_name %}
+    {{ profile.user_name }}
+    {% elif selected_user and selected_user.user_name %}
+    {{ selected_user.user_name }}
+    {% elif selected_user and selected_user.user_id %}
+    {{ selected_user.user_id }}
+    {% else %}
+    Selected account
+    {% endif %}
+    {% if profile and profile.email %}
+    &mdash; {{ profile.email }}
+    {% elif selected_user and selected_user.email %}
+    &mdash; {{ selected_user.email }}
+    {% endif %}
+</h3>
 <div class="row">
     <div class="col-md-3"><strong>Net:</strong> <span id="netValue">{{ net }}</span></div>
     <div class="col-md-3"><strong>Opening Balance:</strong> <span id="openingBalanceValue">{{ opening_balance }}</span></div>
@@ -284,6 +299,13 @@
             return value === null || value === undefined ? '' : value;
         }
 
+        function setText(id, value) {
+            var el = document.getElementById(id);
+            if (el) {
+                el.textContent = displayValue(value);
+            }
+        }
+
         function setRefreshButtonState(loading) {
             if (!refreshTradeButton) { return; }
             refreshTradeButton.disabled = !!loading;
@@ -334,11 +356,11 @@
                         updateRefreshStatus('Refresh failed');
                         return;
                     }
-                    document.getElementById('netValue').textContent = displayValue(data.net);
-                    document.getElementById('openingBalanceValue').textContent = displayValue(data.opening_balance);
-                    document.getElementById('liveBalanceValue').textContent = displayValue(data.live_balance);
-                    document.getElementById('cashValue').textContent = displayValue(data.cash);
-                    document.getElementById('debitsValue').textContent = displayValue(data.debits);
+                    setText('netValue', data.net);
+                    setText('openingBalanceValue', data.opening_balance);
+                    setText('liveBalanceValue', data.live_balance);
+                    setText('cashValue', data.cash);
+                    setText('debitsValue', data.debits);
 
                     if (data.selected_status) {
                         updateStatus(data.selected_status);
@@ -415,7 +437,7 @@
                             '<td>' + displayValue(o.price) + '</td>' +
                             '<td>' + displayValue(o.product) + '</td>' +
                             '<td>' + displayValue(o.order_type) + '</td>' +
-                            '<td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Place again</button></td>' +
+                                '<td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Place again</button></td>' +
                             '</tr>';
                     }).join('');
                     var executedBody = document.querySelector('#executedOrdersTable tbody');
@@ -432,7 +454,7 @@
                             '<td>' + displayValue(o.price) + '</td>' +
                             '<td>' + displayValue(o.product) + '</td>' +
                             '<td>' + displayValue(o.order_type) + '</td>' +
-                            '<td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Place again</button></td>' +
+                                '<td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Place again</button></td>' +
                             '</tr>';
                     }).join('');
                     var cancelledBody = document.querySelector('#cancelledOrdersTable tbody');
@@ -547,7 +569,7 @@
                             band.textContent = 'Circuit: ' + d.lower + ' - ' + d.upper;
                         }
                     });
-            } else { price.disabled = true; price.value = ''; band.textContent = ''; }
+                } else { price.disabled = true; price.value = ''; band.textContent = ''; }
         }
         type.addEventListener('change', toggle);
         sym.addEventListener('change', toggle);

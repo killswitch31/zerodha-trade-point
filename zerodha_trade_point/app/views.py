@@ -653,6 +653,7 @@ def trade(request):
         if not trade_all and user.owner_id != request.user.id:
             context['error'] = 'Not authorized for this account.'
             return render(request, 'app/trade.html', context)
+        context['selected_user'] = user
         context['selected_status'] = _status_presentation(_auth_status(user))
         try:
             context.update(_trade_data_for_user(user))
@@ -835,20 +836,32 @@ def _validate_circuit(kite, exchange, symbol, order_type, price):
 def _place(kite, p):
     """Places a regular order from a dict of POST params; returns order_id."""
     order_type = p.get('order_type', 'MARKET')
+    quantity = int(p['quantity'])
+    if quantity <= 0:
+        raise ValueError('Quantity must be greater than zero.')
     price = float(p['price']) if p.get('price') else None
+    if order_type == KiteConnect.ORDER_TYPE_LIMIT and price is None:
+        raise ValueError('Price is required for LIMIT orders.')
     err = _validate_circuit(kite, p['exchange'], p['tradingsymbol'], order_type, price)
     if err:
         raise ValueError(err)
+
+    order_kwargs = {
+        'variety': KiteConnect.VARIETY_REGULAR,
+        'exchange': p['exchange'],
+        'tradingsymbol': p['tradingsymbol'],
+        'transaction_type': p['transaction_type'],
+        'quantity': quantity,
+        'product': p.get('product', 'CNC'),
+        'order_type': order_type,
+        'validity': KiteConnect.VALIDITY_DAY,
+    }
+    if order_type == KiteConnect.ORDER_TYPE_LIMIT:
+        order_kwargs['price'] = price
+    if order_type == KiteConnect.ORDER_TYPE_MARKET:
+        order_kwargs['market_protection'] = 1
     return kite.place_order(
-        variety=KiteConnect.VARIETY_REGULAR,
-        exchange=p['exchange'],
-        tradingsymbol=p['tradingsymbol'],
-        transaction_type=p['transaction_type'],
-        quantity=int(p['quantity']),
-        product=p.get('product', 'CNC'),
-        order_type=order_type,
-        price=price,
-        validity=KiteConnect.VALIDITY_DAY,
+        **order_kwargs,
     )
 
 
@@ -897,12 +910,24 @@ def trade_modify(request):
             kite.cancel_order(variety=KiteConnect.VARIETY_REGULAR, order_id=p.get('order_id'))
             _place(kite, {**p.dict(), 'exchange': p.get('new_exchange')})
             return _trade_redirect(api_key, 'success', 'Order cancelled and re-placed on new exchange.')
+        order_type = p.get('order_type')
+        quantity = int(p['quantity'])
+        if quantity <= 0:
+            raise ValueError('Quantity must be greater than zero.')
+        modify_kwargs = {
+            'variety': KiteConnect.VARIETY_REGULAR,
+            'order_id': p.get('order_id'),
+            'quantity': quantity,
+            'order_type': order_type,
+        }
+        if order_type == KiteConnect.ORDER_TYPE_LIMIT:
+            if not p.get('price'):
+                raise ValueError('Price is required for LIMIT orders.')
+            modify_kwargs['price'] = float(p['price'])
+        if order_type == KiteConnect.ORDER_TYPE_MARKET:
+            modify_kwargs['market_protection'] = 1
         kite.modify_order(
-            variety=KiteConnect.VARIETY_REGULAR,
-            order_id=p.get('order_id'),
-            quantity=int(p['quantity']),
-            price=float(p['price']) if p.get('price') else None,
-            order_type=p.get('order_type'),
+            **modify_kwargs,
         )
         return _trade_redirect(api_key, 'success', 'Order modified.')
     except (KiteException, ValueError, KeyError) as ex:

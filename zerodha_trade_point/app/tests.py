@@ -7,7 +7,7 @@ from django.test import TestCase, RequestFactory, override_settings
 from django.urls import reverse
 from app.forms import AddUserForm
 from app.models import KiteUser
-from app.views import token_statuses, configurezkauth
+from app.views import token_statuses, configurezkauth, _kite_login_url
 
 
 class AddUserFormTests(TestCase):
@@ -197,3 +197,77 @@ class ConfigureZkAuthEditCredentialsTests(TestCase):
         self.assertIn(b'Invalid edit request. Please review the entered fields.', response.content)
         self.kite_user.refresh_from_db()
         self.assertEqual(self.kite_user.automate, 1)
+
+
+class ConfigureZkAuthReauthModeTests(TestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='owner2', password='owner-pass')
+        self.kite_user = KiteUser.objects.create(
+            owner=self.user,
+            api_key='mode-api',
+            api_secret='mode-secret',
+            access_token='mode-token',
+            user_name='Mode Kite',
+            user_id='MD1234',
+            zerodha_password='mode-pass',
+            zerodha_totp_key='MODETOTP',
+            automate=1,
+        )
+
+    @patch('app.views._auth_status', return_value='active')
+    @patch('app.views._automated_kite_login')
+    def test_reauth_with_automate_one_does_not_redirect_to_login_url(self, mock_auto, _mock_status):
+        request = self.factory.get(reverse('configurezkauth') + '?reauth=' + self.kite_user.zk_user_id)
+        request.user = self.user
+        request.session = {}
+
+        response = configurezkauth(request)
+
+        self.assertEqual(response.status_code, 200)
+        mock_auto.assert_called_once()
+        self.assertNotIn('pending_zk_user_id', request.session)
+
+    @patch('app.views._auth_status', return_value='active')
+    @patch('app.views._make_kite')
+    def test_reauth_with_automate_zero_redirects_to_login_url(self, mock_make_kite, _mock_status):
+        self.kite_user.automate = 0
+        self.kite_user.save(update_fields=['automate'])
+
+        class _MockKite:
+            def login_url(self):
+                return 'https://example.com/kite-login'
+
+        mock_make_kite.return_value = _MockKite()
+
+        request = self.factory.get(reverse('configurezkauth') + '?reauth=' + self.kite_user.zk_user_id)
+        request.user = self.user
+        request.session = {}
+
+        response = configurezkauth(request)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], 'https://example.com/kite-login')
+        self.assertEqual(request.session.get('pending_zk_user_id'), self.kite_user.zk_user_id)
+
+
+class KiteLoginUrlNormalizationTests(TestCase):
+    @patch('app.views._make_kite')
+    def test_kite_trade_domain_is_normalized(self, mock_make_kite):
+        class _MockKite:
+            def login_url(self):
+                return 'https://kite.trade/connect/login?v=3&api_key=abc'
+
+        mock_make_kite.return_value = _MockKite()
+        url = _kite_login_url('abc')
+        self.assertEqual(url, 'https://kite.zerodha.com/connect/login?v=3&api_key=abc')
+
+    @patch('app.views._make_kite')
+    def test_non_kite_trade_domain_is_unchanged(self, mock_make_kite):
+        class _MockKite:
+            def login_url(self):
+                return 'https://example.com/connect/login?v=3&api_key=abc'
+
+        mock_make_kite.return_value = _MockKite()
+        url = _kite_login_url('abc')
+        self.assertEqual(url, 'https://example.com/connect/login?v=3&api_key=abc')

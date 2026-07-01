@@ -192,13 +192,24 @@ def _sync_profile_from_kite(user):
     return profile
 
 
+def _kite_login_url(api_key):
+    """Returns the Zerodha OAuth URL with a normalized host.
+
+    Some SDK/runtime combinations produce kite.trade links. For consistency in
+    this app, normalize those to kite.zerodha.com and use one URL source for
+    both automate=0 and automate=1 flows.
+    """
+    url = _make_kite(api_key).login_url()
+    return url.replace('https://kite.trade/', 'https://kite.zerodha.com/')
+
+
 def _automated_kite_login(user):
     """Performs non-interactive Zerodha login + 2FA flow and stores new token."""
     login_user_id = (user.user_id or user.user_name or '').strip()
     if not (user.automate and user.zerodha_password and user.zerodha_totp_key and login_user_id):
         raise ValueError('Automation requires Zerodha user ID/username, password and TOTP key.')
     session = requests.Session()
-    login_url = 'https://kite.trade/connect/login?v=3&api_key={0}'.format(user.api_key)
+    login_url = _kite_login_url(user.api_key)
     initial_response = session.get(login_url, timeout=20)
     login_page_url = initial_response.url
     login_response = session.post(
@@ -244,13 +255,21 @@ def _automated_kite_login(user):
         pass
 
 
+def _is_automate_enabled(user):
+    """Returns True only when automate is explicitly set to 1."""
+    try:
+        return int(getattr(user, 'automate', 0)) == 1
+    except (TypeError, ValueError):
+        return False
+
+
 def _start_reauthentication(request, user):
     """Starts manual OAuth or executes automated auth depending on the user mode."""
-    if user.automate == 1:
+    if _is_automate_enabled(user):
         _automated_kite_login(user)
         return None
     request.session['pending_zk_user_id'] = user.zk_user_id
-    return _make_kite(user.api_key).login_url()
+    return _kite_login_url(user.api_key)
 
 
 @admin_required

@@ -580,24 +580,45 @@ def _get_trade_user(api_key, request_user):
 
 
 def _trade_data_for_user(user):
-    def _fetch(kite):
-        profile = kite.profile()
-        orders = kite.orders()
-        margins = kite.margins()
-        holdings = kite.holdings()
-        positions = kite.positions()
-        return profile, orders, margins, holdings, positions
+    def _safe_call(operation, default):
+        try:
+            return _call_with_token_renewal(user, operation)
+        except KiteException:
+            return default
 
-    profile, orders, margins, holdings, positions = _call_with_token_renewal(user, _fetch)
-    if isinstance(positions, dict):
-        positions = positions.get('net', [])
+    profile = _safe_call(lambda kite: kite.profile(), {})
+    orders = _safe_call(lambda kite: kite.orders(), [])
+    margins = _safe_call(lambda kite: kite.margins(), {})
+    holdings = _safe_call(lambda kite: kite.holdings(), [])
+    positions_payload = _safe_call(lambda kite: kite.positions(), {})
+
+    if not isinstance(profile, dict):
+        profile = {}
+    if not isinstance(orders, list):
+        orders = []
+    if not isinstance(holdings, list):
+        holdings = []
+    if isinstance(positions_payload, dict):
+        positions = positions_payload.get('net', [])
+    elif isinstance(positions_payload, list):
+        positions = positions_payload
+    else:
+        positions = []
+
     positions = [_normalize_position(p) for p in positions]
-    segment = margins.get('equity', {}) if isinstance(margins, dict) and isinstance(margins.get('equity'), dict) else margins
+    segment = margins.get('equity', {}) if isinstance(margins, dict) and isinstance(margins.get('equity'), dict) else (margins if isinstance(margins, dict) else {})
     available = segment.get('available', {}) if isinstance(segment, dict) and isinstance(segment.get('available'), dict) else {}
-    utilised = segment.get('utilised', {}) if isinstance(segment, dict) and isinstance(segment.get('utilised'), dict) else {}
+    utilised = {}
+    if isinstance(segment, dict):
+        if isinstance(segment.get('utilised'), dict):
+            utilised = segment.get('utilised')
+        elif isinstance(segment.get('utilized'), dict):
+            utilised = segment.get('utilized')
+
+    open_statuses = {'OPEN', 'OPEN PENDING', 'TRIGGER PENDING', 'AMO REQ RECEIVED'}
     return {
-        'profile': profile,
-        'open_orders': [o for o in orders if o.get('status') == 'OPEN'],
+        'profile': profile or None,
+        'open_orders': [o for o in orders if o.get('status') in open_statuses],
         'executed_orders': [o for o in orders if o.get('status') == 'COMPLETE'],
         'cancelled_orders': [o for o in orders if o.get('status') == 'CANCELLED'],
         'holdings': holdings,

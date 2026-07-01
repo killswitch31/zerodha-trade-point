@@ -8,7 +8,7 @@ from django.urls import reverse
 from kiteconnect.exceptions import KiteException
 from app.forms import AddUserForm
 from app.models import KiteUser
-from app.views import token_statuses, configurezkauth, _kite_login_url, trade, _place, trade_modify
+from app.views import token_statuses, configurezkauth, _kite_login_url, trade, _place, trade_modify, _trade_data_for_user
 
 
 class AddUserFormTests(TestCase):
@@ -346,3 +346,33 @@ class TradeModifyComplianceTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIsNone(kite.modify_kwargs)
+
+
+class TradeDataResilienceTests(TestCase):
+    class _KitePartialStub:
+        def profile(self):
+            return {'user_name': 'Trader', 'email': 'trader@example.com'}
+
+        def orders(self):
+            raise KiteException('orders unavailable')
+
+        def margins(self):
+            return {'equity': {'available': {'cash': 1000}}}
+
+        def holdings(self):
+            return [{'tradingsymbol': 'INFY', 'pnl': 42}]
+
+        def positions(self):
+            return {'net': [{'tradingsymbol': 'SBIN', 'quantity': 1, 'average_price': 100, 'last_price': 101, 'pnl': 1}]}
+
+    @patch('app.views._call_with_token_renewal')
+    def test_trade_data_survives_partial_api_failures(self, mock_call):
+        kite = self._KitePartialStub()
+        mock_call.side_effect = lambda _user, operation: operation(kite)
+
+        data = _trade_data_for_user(object())
+
+        self.assertEqual(data['profile']['user_name'], 'Trader')
+        self.assertEqual(data['open_orders'], [])
+        self.assertEqual(len(data['holdings']), 1)
+        self.assertEqual(len(data['positions']), 1)

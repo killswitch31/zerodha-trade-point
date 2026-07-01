@@ -19,6 +19,7 @@ pycparser==3.0
 pyOpenSSL==26.3.0
 python-dateutil==2.9.0.post0
 requests==2.34.2
+pyotp==2.9.0
 service-identity==26.1.0
 six==1.17.0
 sqlparse==0.5.5

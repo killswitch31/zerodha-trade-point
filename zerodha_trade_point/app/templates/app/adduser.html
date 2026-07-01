@@ -4,6 +4,10 @@
 
 <h2>{{ title }}</h2>
 
+{% if page_message %}
+<div class="alert alert-{{ page_message_type|default:'info' }}">{{ page_message }}</div>
+{% endif %}
+
 {% if result %}
     {% if success %}
     <div class="alert alert-success">{{ message }}</div>
@@ -26,43 +30,89 @@
     </form>
     {% endif %}
     {% if rows %}
-    <h3>Stored users</h3>
+    <h3>Configured Zerodha users</h3>
     <div style="margin-bottom:15px;">
         <button type="button" class="btn btn-info" id="checkAccessTokenValidity">Check Access Token Validity</button>
         <div id="accessTokenStatusCountdown" class="help-block" style="margin-top:8px;">Next status refresh in 600s</div>
     </div>
     <table class="table">
-        <thead><tr><th>App user</th><th>Zerodha user</th><th>API key</th><th>API secret</th><th>Status</th><th>Action</th></tr></thead>
+        <thead>
+            <tr>
+                <th>App user</th>
+                <th>ID</th>
+                <th>Zerodha Username</th>
+                <th>Zerodha User ID</th>
+                <th>Zerodha Password</th>
+                <th>Zerodha TOTP Key</th>
+                <th>API Key</th>
+                <th>API Secret</th>
+                <th>Automate</th>
+                <th>Token Status</th>
+                <th>Action</th>
+            </tr>
+        </thead>
         <tbody>
         {% for r in rows %}
             <tr>
                 <td>{{ r.user.owner.username|default:"-" }}</td>
-                <td>{{ r.user.user_name|default:"(unauthenticated)" }}</td>
+                <td><code>{{ r.user.zk_user_id }}</code></td>
+                <td>{{ r.user.user_name|default:"(pending profile sync)" }}</td>
+                <td>{{ r.user.user_id|default:"-" }}</td>
                 <td>
                     <span class="masked-value">••••••••••</span>
-                    <span class="real-value" style="display:none;">{{ r.user.api_key }}</span>
+                    <span class="real-value" style="display:none;">{{ r.user.zerodha_password|default:"-" }}</span>
                     <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
                 </td>
                 <td>
-                    {% if r.user.api_secret %}
-                        <span class="masked-value">••••••••••</span>
-                        <span class="real-value" style="display:none;">{{ r.user.api_secret }}</span>
-                        <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
-                    {% else %}
-                        <span class="text-muted">-</span>
-                    {% endif %}
+                    <span class="masked-value">••••••••••</span>
+                    <span class="real-value" style="display:none;">{{ r.user.zerodha_totp_key|default:"-" }}</span>
+                    <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
                 </td>
+                <td><code style="font-size:11px; word-break:break-all;">{{ r.user.api_key }}</code></td>
+                <td>
+                    <span class="masked-value">••••••••••</span>
+                    <span class="real-value" style="display:none;">{{ r.user.api_secret|default:"-" }}</span>
+                    <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
+                </td>
+                <td>{{ r.user.automate }}</td>
                 <td data-token-key="{{ r.user.api_key }}">
                     <span class="label {{ r.presentation.css }}">{{ r.presentation.label }}</span>
+                    <div class="help-block" style="margin:4px 0 0 0; font-size:11px;" data-token-checked-at>
+                        Last checked: {{ r.checked_at|date:"Y-m-d H:i:s" }}
+                    </div>
                 </td>
                 <td>
-                    {% if not r.user.manual_token and r.user.api_secret %}
-                    <a href="{% url 'configurezkauth' %}?reauth={{ r.user.api_key }}" class="btn btn-warning btn-sm">Re-authenticate</a>
-                    {% elif r.user.manual_token %}
-                    <span class="text-muted">Manual token stored</span>
-                    {% else %}
-                    <span class="text-muted">No reauth available</span>
-                    {% endif %}
+                    <a href="{% url 'configurezkauth' %}?reauth={{ r.user.zk_user_id }}" class="btn btn-warning btn-sm">Re-authenticate</a>
+                    <button type="button" class="btn btn-primary btn-sm" onclick="toggleEditRow('{{ r.user.zk_user_id }}')">Edit</button>
+                </td>
+            </tr>
+            <tr id="editRow-{{ r.user.zk_user_id }}" style="display:none; background:#fafafa;">
+                <td colspan="11">
+                    <form method="post" class="form-horizontal" style="margin-bottom:0;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="edit_credentials" />
+                        <input type="hidden" name="zk_user_id" value="{{ r.user.zk_user_id }}" />
+                        <div class="row" style="margin:0;">
+                            <div class="col-sm-3" style="padding:0 10px 8px 0;">
+                                <label>API KEY</label>
+                                <input type="text" name="api_key" class="form-control" value="{{ r.user.api_key }}" />
+                            </div>
+                            <div class="col-sm-3" style="padding:0 10px 8px 0;">
+                                <label>API Secret</label>
+                                <input type="password" name="api_secret" class="form-control" placeholder="Leave blank to keep current" />
+                            </div>
+                            <div class="col-sm-3" style="padding:0 10px 8px 0;">
+                                <label>Zerodha Password</label>
+                                <input type="password" name="zerodha_password" class="form-control" placeholder="Leave blank to keep current" />
+                            </div>
+                            <div class="col-sm-3" style="padding:0 10px 8px 0;">
+                                <label>Zerodha TOTP KEY</label>
+                                <input type="password" name="zerodha_totp_key" class="form-control" placeholder="Leave blank to keep current" />
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-success btn-sm">Save</button>
+                        <button type="button" class="btn btn-default btn-sm" onclick="toggleEditRow('{{ r.user.zk_user_id }}')">Cancel</button>
+                    </form>
                 </td>
             </tr>
         {% endfor %}
@@ -70,12 +120,38 @@
     </table>
     {% endif %}
 
-    <h3>Configure Zerodha authentication</h3>
+    <h3>Configure ZK Auth</h3>
     <form action="" method="post" class="form-horizontal">
         {% csrf_token %}
+        <div class="form-group">
+            <label>Zerodha Username</label>
+            {{ form.zerodha_username }}
+            {% if form.zerodha_username.errors %}<div class="text-danger">{{ form.zerodha_username.errors|join:", " }}</div>{% endif %}
+        </div>
         <div class="form-group">{{ form.api_key }}</div>
-        <div class="form-group" id="secretField">{{ form.api_secret }}
-            <p class="help-block">OAuth: you'll be redirected to Zerodha to authorize.</p>
+        <div class="form-group" id="secretField">
+            {{ form.api_secret }}
+            {% if form.api_secret.errors %}<div class="text-danger">{{ form.api_secret.errors|join:", " }}</div>{% endif %}
+        </div>
+        <div class="form-group">
+            <label>Automate Daily Login</label>
+            {{ form.automate }}
+            {% if form.automate.errors %}<div class="text-danger">{{ form.automate.errors|join:", " }}</div>{% endif %}
+        </div>
+        <div id="automationFields" style="display:none;">
+            <div class="form-group">
+                <label>Zerodha Password</label>
+                {{ form.zerodha_password }}
+                {% if form.zerodha_password.errors %}<div class="text-danger">{{ form.zerodha_password.errors|join:", " }}</div>{% endif %}
+            </div>
+            <div class="form-group">
+                <label>Zerodha TOTP KEY</label>
+                {{ form.zerodha_totp_key }}
+                {% if form.zerodha_totp_key.errors %}<div class="text-danger">{{ form.zerodha_totp_key.errors|join:", " }}</div>{% endif %}
+            </div>
+        </div>
+        <div class="form-group">
+            <p class="help-block">OAuth uses API Key/API Secret with Zerodha redirect authorization.</p>
             <p class="help-block">Set this <strong>Redirect URL</strong> in your Zerodha Kite app settings:<br />
                 <code id="redirectUrl" style="word-break:break-all;">{{ redirect_url }}</code>
                 <button type="button" class="btn btn-default btn-xs" onclick="copyRedirectUrl()">Copy</button>
@@ -98,15 +174,25 @@
             }
         }
 
+        function toggleEditRow(zkUserId) {
+            var row = document.getElementById('editRow-' + zkUserId);
+            if (!row) { return; }
+            row.style.display = row.style.display === 'none' ? '' : 'none';
+        }
+
         function updateStatusCells(data) {
             var statuses = data.statuses || {};
             document.querySelectorAll('[data-token-key]').forEach(function (cell) {
                 var info = statuses[cell.getAttribute('data-token-key')];
                 if (!info) { return; }
                 var badge = cell.querySelector('.label');
+                var checkedAt = cell.querySelector('[data-token-checked-at]');
                 if (!badge) { return; }
                 badge.className = 'label ' + info.css;
                 badge.textContent = info.label;
+                if (checkedAt && info.checked_at_display) {
+                    checkedAt.textContent = 'Last checked: ' + info.checked_at_display;
+                }
             });
         }
 
@@ -143,6 +229,19 @@
         document.querySelectorAll('.reveal-btn').forEach(function (button) {
             button.addEventListener('click', toggleReveal);
         });
+
+        function updateAutomationFields() {
+            var automateField = document.getElementById('id_automate');
+            var automationFields = document.getElementById('automationFields');
+            if (!automateField || !automationFields) { return; }
+            automationFields.style.display = automateField.value === '1' ? 'block' : 'none';
+        }
+
+        var automateField = document.getElementById('id_automate');
+        if (automateField) {
+            automateField.addEventListener('change', updateAutomationFields);
+            updateAutomationFields();
+        }
 
         var checkButton = document.getElementById('checkAccessTokenValidity');
         var countdownEl = document.getElementById('accessTokenStatusCountdown');

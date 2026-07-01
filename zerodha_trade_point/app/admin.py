@@ -25,8 +25,8 @@ class UserWithRoleAdmin(UserAdmin):
 
 @admin.register(KiteUser)
 class KiteUserAdmin(admin.ModelAdmin):
-    list_display = ('user_name', 'user_id', 'api_key', 'owner', 'manual_token')
-    search_fields = ('user_name', 'user_id', 'api_key')
+    list_display = ('zk_user_id', 'user_name', 'user_id', 'api_key', 'owner', 'automate', 'manual_token')
+    search_fields = ('zk_user_id', 'user_name', 'user_id', 'api_key')
 
 
 admin.site.unregister(User)

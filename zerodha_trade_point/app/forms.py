@@ -21,7 +21,11 @@ class BootstrapAuthenticationForm(AuthenticationForm):
 
 
 class AddUserForm(forms.Form):
-    """Collects credentials for Zerodha OAuth: API key + secret."""
+    """Collects Zerodha credentials for manual or automated auth flows."""
+    zerodha_username = forms.CharField(max_length=64,
+                                       widget=forms.TextInput({
+                                           'class': 'form-control',
+                                           'placeholder': 'Zerodha username'}))
     api_key = forms.CharField(max_length=64,
                               widget=forms.TextInput({
                                   'class': 'form-control',
@@ -31,10 +35,42 @@ class AddUserForm(forms.Form):
                                      'class': 'form-control',
                                      'placeholder': 'API secret'}))
 
+    automate = forms.ChoiceField(
+        choices=(('0', 'No'), ('1', 'Yes')),
+        initial='0',
+        widget=forms.Select({'class': 'form-control'})
+    )
+    zerodha_password = forms.CharField(
+        required=False,
+        max_length=128,
+        widget=forms.PasswordInput({
+            'class': 'form-control',
+            'placeholder': 'Zerodha password'}))
+    zerodha_totp_key = forms.CharField(
+        required=False,
+        max_length=64,
+        widget=forms.PasswordInput({
+            'class': 'form-control',
+            'placeholder': 'Zerodha TOTP key'}))
+
+    def clean_automate(self):
+        raw = self.cleaned_data['automate']
+        if raw not in ('0', '1'):
+            raise forms.ValidationError('Automate daily login must be Yes or No.')
+        return int(raw)
+
     def clean(self):
         cleaned = super().clean()
+        if not cleaned.get('zerodha_username'):
+            self.add_error('zerodha_username', 'Zerodha username is required.')
         if not cleaned.get('api_secret'):
             self.add_error('api_secret', 'API secret is required.')
+        automate = cleaned.get('automate', 0)
+        if automate == 1:
+            if not cleaned.get('zerodha_password'):
+                self.add_error('zerodha_password', 'Zerodha password is required when automation is enabled.')
+            if not cleaned.get('zerodha_totp_key'):
+                self.add_error('zerodha_totp_key', 'Zerodha TOTP key is required when automation is enabled.')
         return cleaned
 
 
@@ -67,4 +103,17 @@ class EditAppUserForm(forms.Form):
                                    'placeholder': 'Leave blank to keep current password'}))
     role = forms.ChoiceField(choices=Profile.ROLE_CHOICES,
                              widget=forms.Select({'class': 'form-control'}))
+
+
+class EditKiteCredentialsForm(forms.Form):
+    """Edits selected Zerodha credential fields for an existing Kite user."""
+    zk_user_id = forms.CharField(max_length=24)
+    api_key = forms.CharField(required=False, max_length=64,
+                              widget=forms.TextInput({'class': 'form-control'}))
+    api_secret = forms.CharField(required=False, max_length=128,
+                                 widget=forms.PasswordInput({'class': 'form-control'}))
+    zerodha_password = forms.CharField(required=False, max_length=128,
+                                       widget=forms.PasswordInput({'class': 'form-control'}))
+    zerodha_totp_key = forms.CharField(required=False, max_length=64,
+                                       widget=forms.PasswordInput({'class': 'form-control'}))
 

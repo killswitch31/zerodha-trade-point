@@ -3,17 +3,22 @@ Definition of views.
 """
 
 import time
+import requests
+import pyotp
+import json
 from datetime import datetime
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpRequest, JsonResponse
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.http import urlencode
+from urllib.parse import parse_qs, urlparse
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.models import User
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import KiteException, TokenException
-from app.forms import AddUserForm, ManageZkUserForm, EditAppUserForm
+from app.forms import AddUserForm, ManageZkUserForm, EditAppUserForm, EditKiteCredentialsForm
 from app.models import KiteUser, Profile
 
 # Per-process cache of instruments per exchange: {exchange: (timestamp, list)}.
@@ -95,9 +100,13 @@ def _persist_token_data(user, data):
     if refresh_token and refresh_token != user.refresh_token:
         user.refresh_token = refresh_token
         changed.append('refresh_token')
+    # user/profile returns user_name and user_id; both are kept fresh from API.
+    profile_source = data
+    if 'user_name' not in profile_source and 'data' in profile_source and isinstance(profile_source.get('data'), dict):
+        profile_source = profile_source.get('data')
     for field in ('user_id', 'user_name', 'email'):
-        if field in data and data.get(field) and data.get(field) != getattr(user, field):
-            setattr(user, field, data.get(field))
+        if field in profile_source and profile_source.get(field) and profile_source.get(field) != getattr(user, field):
+            setattr(user, field, profile_source.get(field))
             changed.append(field)
     if changed:
         user.save(update_fields=changed)
@@ -134,9 +143,7 @@ def _auth_status(user):
         _call_with_token_renewal(user, lambda kite: kite.profile())
         return 'active'
     except TokenException:
-        # Kite returns 403 when the access token is invalid/expired.
-        # Manual-token users are not auto-reauthenticated; flag distinctly.
-        return 'expired_manual' if user.manual_token else 'expired'
+        return 'expired'
     except KiteException:
         return 'error'
 
@@ -149,7 +156,7 @@ def _status_presentation(status):
     """
     if status == 'active':
         return {'label': 'Active', 'css': 'label-success'}
-    return {'label': 'Needs reauthentication', 'css': 'label-danger'}
+    return {'label': 'Needs Authentication', 'css': 'label-danger'}
 
 
 def _user_rows(request_user, owner_filter=''):
@@ -167,12 +174,71 @@ def _user_rows(request_user, owner_filter=''):
     rows = []
     for u in qs:
         status = _auth_status(u)
+        checked_at = timezone.localtime(timezone.now())
         rows.append({
             'user': u,
             'status': status,
             'presentation': _status_presentation(status),
+            'checked_at': checked_at,
         })
     return rows
+
+
+def _sync_profile_from_kite(user):
+    """Fetches /user/profile through SDK and refreshes mapped DB fields."""
+    profile = _call_with_token_renewal(user, lambda kite: kite.profile())
+    if isinstance(profile, dict):
+        _persist_token_data(user, profile)
+    return profile
+
+
+def _automated_kite_login(user):
+    """Performs non-interactive Zerodha login + 2FA flow and stores new token."""
+    if not (user.automate and user.zerodha_password and user.zerodha_totp_key and user.user_id):
+        raise ValueError('Automation requires user ID, password and TOTP key.')
+    session = requests.Session()
+    login_url = 'https://kite.trade/connect/login?v=3&api_key={0}'.format(user.api_key)
+    initial_response = session.get(login_url, timeout=20)
+    login_page_url = initial_response.url
+    login_response = session.post(
+        'https://kite.zerodha.com/api/login',
+        data={'user_id': user.user_id, 'password': user.zerodha_password},
+        timeout=20,
+    )
+    login_payload = json.loads(login_response.content)
+    request_id = ((login_payload.get('data') or {}).get('request_id'))
+    if not request_id:
+        raise ValueError('Login failed while submitting Zerodha credentials.')
+    current_totp = pyotp.TOTP(user.zerodha_totp_key).now()
+    twofa_response = session.post(
+        'https://kite.zerodha.com/api/twofa',
+        data={
+            'user_id': user.user_id,
+            'request_id': request_id,
+            'twofa_value': current_totp,
+        },
+        timeout=20,
+    )
+    twofa_payload = twofa_response.json()
+    if twofa_payload.get('status') != 'success':
+        raise ValueError('2FA failed while automating Zerodha login.')
+    final_response = session.get(login_page_url, allow_redirects=True, timeout=20)
+    if 'request_token' not in final_response.url:
+        raise ValueError('Unable to obtain request token from Zerodha redirect URL.')
+    request_token = parse_qs(urlparse(final_response.url).query)['request_token'][0]
+    kite = _make_kite(user.api_key)
+    session_data = kite.generate_session(request_token, api_secret=user.api_secret)
+    _persist_token_data(user, session_data)
+    _sync_profile_from_kite(user)
+
+
+def _start_reauthentication(request, user):
+    """Starts manual OAuth or executes automated auth depending on the user mode."""
+    if user.automate == 1:
+        _automated_kite_login(user)
+        return None
+    request.session['pending_zk_user_id'] = user.zk_user_id
+    return _make_kite(user.api_key).login_url()
 
 
 @admin_required
@@ -290,13 +356,18 @@ def token_statuses(request):
     """
     owner_filter = request.GET.get('owner', '') if can_trade_all(request.user) else ''
     statuses = {}
+    statuses_by_id = {}
     for row in _user_rows(request.user, owner_filter):
-        statuses[row['user'].api_key] = {
+        payload = {
             'status': row['status'],
             'label': row['presentation']['label'],
             'css': row['presentation']['css'],
+            'checked_at': row['checked_at'].isoformat(),
+            'checked_at_display': row['checked_at'].strftime('%Y-%m-%d %H:%M:%S'),
         }
-    return JsonResponse({'statuses': statuses})
+        statuses[row['user'].api_key] = payload
+        statuses_by_id[row['user'].zk_user_id] = payload
+    return JsonResponse({'statuses': statuses, 'statuses_by_id': statuses_by_id})
 
 
 def _owner_choices():
@@ -305,55 +376,127 @@ def _owner_choices():
 
 
 @account_config_required
-@account_config_required
 def configurezkauth(request):
-    """Lists stored users with auth status; adds or re-authenticates a user."""
+    """Lists configured Zerodha users; adds and authenticates via manual or automated flow."""
     assert isinstance(request, HttpRequest)
+    owner_filter = request.GET.get('owner', '') if is_admin(request.user) else ''
+    context = {
+        'title': 'Configure ZK Auth',
+        'year': datetime.now().year,
+        'is_admin': is_admin(request.user),
+        'owners': _owner_choices() if is_admin(request.user) else [],
+        'owner_filter': owner_filter,
+        'rows': _user_rows(request.user, owner_filter),
+        'redirect_url': request.build_absolute_uri(reverse('kite_callback')),
+    }
 
-    # Re-authenticate an existing user using credentials stored in the DB.
-    reauth_key = request.GET.get('reauth')
-    if reauth_key:
-        user = get_object_or_404(KiteUser, api_key=reauth_key)
+    reauth_id = request.GET.get('reauth')
+    if reauth_id:
+        user = get_object_or_404(KiteUser, zk_user_id=reauth_id)
         if not is_admin(request.user) and user.owner_id != request.user.id:
             return redirect('configurezkauth')
-        if user.manual_token:
-            # Direct bearer-token users are never auto-reauthenticated.
+        if not user.api_secret:
             return redirect('configurezkauth')
-        request.session['pending_api_key'] = user.api_key
-        return redirect(_make_kite(user.api_key).login_url())
+        try:
+            next_url = _start_reauthentication(request, user)
+            if next_url:
+                return redirect(next_url)
+            context['success'] = True
+            context['result'] = True
+            context['message'] = 'Authentication succeeded for {0}.'.format(user.user_name or user.user_id or user.zk_user_id)
+        except Exception as ex:
+            context['success'] = False
+            context['result'] = True
+            context['message'] = 'Authentication failed: {0}'.format(ex)
+        context['form'] = AddUserForm()
+        context['rows'] = _user_rows(request.user, owner_filter)
+        return render(request, 'app/adduser.html', context)
 
     if request.method == 'POST':
+        if request.POST.get('action') == 'edit_credentials':
+            edit_form = EditKiteCredentialsForm(request.POST)
+            if edit_form.is_valid():
+                zk_user_id = edit_form.cleaned_data['zk_user_id']
+                user = get_object_or_404(KiteUser, zk_user_id=zk_user_id)
+                if not is_admin(request.user) and user.owner_id != request.user.id:
+                    return redirect('configurezkauth')
+
+                new_api_key = (edit_form.cleaned_data.get('api_key') or '').strip()
+                new_api_secret = (edit_form.cleaned_data.get('api_secret') or '').strip()
+                new_password = (edit_form.cleaned_data.get('zerodha_password') or '').strip()
+                new_totp = (edit_form.cleaned_data.get('zerodha_totp_key') or '').strip()
+
+                if new_api_key and new_api_key != user.api_key:
+                    exists = KiteUser.objects.exclude(pk=user.pk).filter(api_key=new_api_key).exists()
+                    if exists:
+                        context['page_message'] = 'API key is already in use by another Zerodha user.'
+                        context['page_message_type'] = 'danger'
+                        context['form'] = AddUserForm()
+                        context['rows'] = _user_rows(request.user, owner_filter)
+                        return render(request, 'app/adduser.html', context)
+                    user.api_key = new_api_key
+
+                if new_api_secret:
+                    user.api_secret = new_api_secret
+                if new_password:
+                    user.zerodha_password = new_password
+                if new_totp:
+                    user.zerodha_totp_key = new_totp
+
+                user.save()
+                context['page_message'] = 'Zerodha credentials updated successfully for {0}.'.format(user.zk_user_id)
+                context['page_message_type'] = 'success'
+            else:
+                context['page_message'] = 'Invalid edit request. Please review the entered fields.'
+                context['page_message_type'] = 'danger'
+
+            context['form'] = AddUserForm()
+            context['rows'] = _user_rows(request.user, owner_filter)
+            return render(request, 'app/adduser.html', context)
+
         form = AddUserForm(request.POST)
         if form.is_valid():
-            api_key = form.cleaned_data['api_key']
-            KiteUser.objects.update_or_create(
-                api_key=api_key,
+            cleaned = form.cleaned_data
+            existing = KiteUser.objects.filter(api_key=cleaned['api_key']).first()
+            if existing and existing.owner_id != request.user.id and not is_admin(request.user):
+                context['success'] = False
+                context['result'] = True
+                context['message'] = 'This API key is already configured for another app user.'
+                context['form'] = form
+                return render(request, 'app/adduser.html', context)
+            user, _created = KiteUser.objects.update_or_create(
+                api_key=cleaned['api_key'],
                 defaults={
-                    'api_secret': form.cleaned_data['api_secret'],
+                    'api_secret': cleaned['api_secret'],
                     'manual_token': False,
+                    'automate': cleaned['automate'],
+                    'zerodha_password': cleaned.get('zerodha_password', ''),
+                    'zerodha_totp_key': cleaned.get('zerodha_totp_key', ''),
+                    # Zerodha username field must be populated and overwritten from /user/profile when available.
+                    'user_name': cleaned['zerodha_username'],
+                    # User ID starts from form username so automated login can run before first profile sync.
+                    'user_id': cleaned['zerodha_username'],
                     'owner': request.user,
-                },
+                }
             )
-            request.session['pending_api_key'] = api_key
-            kite = _make_kite(api_key)
-            return redirect(kite.login_url())
+            try:
+                next_url = _start_reauthentication(request, user)
+                if next_url:
+                    return redirect(next_url)
+                context['success'] = True
+                context['result'] = True
+                context['message'] = 'User added and authentication completed for {0}.'.format(user.user_name or user.user_id or user.zk_user_id)
+            except Exception as ex:
+                context['success'] = False
+                context['result'] = True
+                context['message'] = 'User added, but authentication failed: {0}'.format(ex)
+            context['form'] = AddUserForm()
+            context['rows'] = _user_rows(request.user, owner_filter)
+            return render(request, 'app/adduser.html', context)
     else:
         form = AddUserForm()
-    owner_filter = request.GET.get('owner', '') if is_admin(request.user) else ''
-    return render(
-        request,
-        'app/adduser.html',
-        {
-            'title': 'Configure ZK Auth',
-            'year': datetime.now().year,
-            'form': form,
-            'rows': _user_rows(request.user, owner_filter),
-            'is_admin': is_admin(request.user),
-            'owners': _owner_choices() if is_admin(request.user) else [],
-            'owner_filter': owner_filter,
-            'redirect_url': request.build_absolute_uri(reverse('kite_callback')),
-        }
-    )
+    context['form'] = form
+    return render(request, 'app/adduser.html', context)
 
 
 @login_required(login_url='login')
@@ -362,23 +505,30 @@ def kite_callback(request):
     assert isinstance(request, HttpRequest)
     request_token = request.GET.get('request_token')
     status = request.GET.get('status')
-    api_key = request.session.pop('pending_api_key', None) or request.GET.get('api_key')
+    pending_id = request.session.pop('pending_zk_user_id', None)
+    api_key = request.GET.get('api_key')
 
     success, message = False, 'Authentication failed.'
     if status and status != 'success':
         message = 'Kite login was not successful: {0}'.format(status)
     elif not request_token:
         message = 'Missing request_token in redirect.'
-    elif not api_key:
+    elif not pending_id and not api_key:
         message = 'No pending user to authenticate. Start from Configure ZK Auth.'
     else:
         try:
-            user = KiteUser.objects.get(api_key=api_key)
+            if pending_id:
+                user = KiteUser.objects.get(zk_user_id=pending_id)
+            else:
+                user = KiteUser.objects.get(api_key=api_key)
+            if user.owner_id != request.user.id and not is_admin(request.user):
+                return redirect('configurezkauth')
             kite = _make_kite(user.api_key)
             data = kite.generate_session(request_token, api_secret=user.api_secret)
             _persist_token_data(user, data)
+            _sync_profile_from_kite(user)
             success = True
-            message = 'Authentication succeeded for {0}.'.format(user.user_name or user.user_id)
+            message = 'Authentication succeeded for {0}.'.format(user.user_name or user.user_id or user.zk_user_id)
         except KiteUser.DoesNotExist:
             message = 'No stored user for that API key.'
         except KiteException as ex:

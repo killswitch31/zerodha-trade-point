@@ -137,12 +137,14 @@ class ConfigureZkAuthEditCredentialsTests(TestCase):
             'api_secret': 'owner-secret-new',
             'zerodha_password': '',
             'zerodha_totp_key': 'NEWTOTP',
+            'automate': '0',
         })
         self.assertEqual(response.status_code, 200)
         self.kite_user.refresh_from_db()
         self.assertEqual(self.kite_user.api_key, 'owner-api-new')
         self.assertEqual(self.kite_user.api_secret, 'owner-secret-new')
         self.assertEqual(self.kite_user.zerodha_totp_key, 'NEWTOTP')
+        self.assertEqual(self.kite_user.automate, 0)
         # Blank field should preserve existing secret value.
         self.assertEqual(self.kite_user.zerodha_password, 'old-password')
 
@@ -155,6 +157,7 @@ class ConfigureZkAuthEditCredentialsTests(TestCase):
             'api_secret': 'hijack-secret',
             'zerodha_password': 'hijack-pass',
             'zerodha_totp_key': 'HIJACKTOTP',
+            'automate': '0',
         })
         self.assertEqual(response.status_code, 302)
         self.kite_user.refresh_from_db()
@@ -172,8 +175,25 @@ class ConfigureZkAuthEditCredentialsTests(TestCase):
             'api_secret': '',
             'zerodha_password': '',
             'zerodha_totp_key': '',
+            'automate': '1',
         })
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'API key is already in use by another Zerodha user.', response.content)
         self.kite_user.refresh_from_db()
         self.assertEqual(self.kite_user.api_key, 'owner-api')
+
+    @patch('app.views._auth_status', return_value='active')
+    def test_invalid_automate_value_is_rejected(self, _mock_status):
+        response = self._post_edit(self.user, {
+            'action': 'edit_credentials',
+            'zk_user_id': self.kite_user.zk_user_id,
+            'api_key': 'owner-api',
+            'api_secret': '',
+            'zerodha_password': '',
+            'zerodha_totp_key': '',
+            'automate': '3',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Invalid edit request. Please review the entered fields.', response.content)
+        self.kite_user.refresh_from_db()
+        self.assertEqual(self.kite_user.automate, 1)

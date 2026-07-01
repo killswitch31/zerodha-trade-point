@@ -425,6 +425,7 @@ def configurezkauth(request):
                 new_api_secret = (edit_form.cleaned_data.get('api_secret') or '').strip()
                 new_password = (edit_form.cleaned_data.get('zerodha_password') or '').strip()
                 new_totp = (edit_form.cleaned_data.get('zerodha_totp_key') or '').strip()
+                new_automate = edit_form.cleaned_data.get('automate')
 
                 if new_api_key and new_api_key != user.api_key:
                     exists = KiteUser.objects.exclude(pk=user.pk).filter(api_key=new_api_key).exists()
@@ -442,6 +443,8 @@ def configurezkauth(request):
                     user.zerodha_password = new_password
                 if new_totp:
                     user.zerodha_totp_key = new_totp
+                if new_automate in (0, 1):
+                    user.automate = new_automate
 
                 user.save()
                 context['page_message'] = 'Zerodha credentials updated successfully for {0}.'.format(user.zk_user_id)

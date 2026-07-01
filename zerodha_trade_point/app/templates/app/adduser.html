@@ -93,21 +93,28 @@
                         <input type="hidden" name="action" value="edit_credentials" />
                         <input type="hidden" name="zk_user_id" value="{{ r.user.zk_user_id }}" />
                         <div class="row" style="margin:0;">
-                            <div class="col-sm-3" style="padding:0 10px 8px 0;">
+                            <div class="col-sm-2" style="padding:0 10px 8px 0;">
                                 <label>API KEY</label>
                                 <input type="text" name="api_key" class="form-control" value="{{ r.user.api_key }}" />
                             </div>
-                            <div class="col-sm-3" style="padding:0 10px 8px 0;">
+                            <div class="col-sm-2" style="padding:0 10px 8px 0;">
                                 <label>API Secret</label>
                                 <input type="password" name="api_secret" class="form-control" placeholder="Leave blank to keep current" />
                             </div>
-                            <div class="col-sm-3" style="padding:0 10px 8px 0;">
+                            <div class="col-sm-2" style="padding:0 10px 8px 0;">
                                 <label>Zerodha Password</label>
                                 <input type="password" name="zerodha_password" class="form-control" placeholder="Leave blank to keep current" />
                             </div>
-                            <div class="col-sm-3" style="padding:0 10px 8px 0;">
+                            <div class="col-sm-2" style="padding:0 10px 8px 0;">
                                 <label>Zerodha TOTP KEY</label>
                                 <input type="password" name="zerodha_totp_key" class="form-control" placeholder="Leave blank to keep current" />
+                            </div>
+                            <div class="col-sm-2" style="padding:0 10px 8px 0;">
+                                <label>Automate</label>
+                                <select name="automate" class="form-control">
+                                    <option value="0" {% if r.user.automate == 0 %}selected{% endif %}>0</option>
+                                    <option value="1" {% if r.user.automate == 1 %}selected{% endif %}>1</option>
+                                </select>
                             </div>
                         </div>
                         <button type="submit" class="btn btn-success btn-sm">Save</button>

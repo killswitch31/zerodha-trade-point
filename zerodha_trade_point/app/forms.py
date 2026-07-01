@@ -116,4 +116,17 @@ class EditKiteCredentialsForm(forms.Form):
                                        widget=forms.PasswordInput({'class': 'form-control'}))
     zerodha_totp_key = forms.CharField(required=False, max_length=64,
                                        widget=forms.PasswordInput({'class': 'form-control'}))
+    automate = forms.ChoiceField(
+        required=False,
+        choices=(('0', '0'), ('1', '1')),
+        widget=forms.Select({'class': 'form-control'})
+    )
+
+    def clean_automate(self):
+        raw = self.cleaned_data.get('automate', '')
+        if raw in (None, ''):
+            return None
+        if raw not in ('0', '1'):
+            raise forms.ValidationError('Automate must be 0 or 1.')
+        return int(raw)
 

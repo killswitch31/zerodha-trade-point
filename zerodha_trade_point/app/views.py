@@ -194,34 +194,42 @@ def _sync_profile_from_kite(user):
 
 def _automated_kite_login(user):
     """Performs non-interactive Zerodha login + 2FA flow and stores new token."""
-    if not (user.automate and user.zerodha_password and user.zerodha_totp_key and user.user_id):
-        raise ValueError('Automation requires user ID, password and TOTP key.')
+    login_user_id = (user.user_id or user.user_name or '').strip()
+    if not (user.automate and user.zerodha_password and user.zerodha_totp_key and login_user_id):
+        raise ValueError('Automation requires Zerodha user ID/username, password and TOTP key.')
     session = requests.Session()
     login_url = 'https://kite.trade/connect/login?v=3&api_key={0}'.format(user.api_key)
     initial_response = session.get(login_url, timeout=20)
     login_page_url = initial_response.url
     login_response = session.post(
         'https://kite.zerodha.com/api/login',
-        data={'user_id': user.user_id, 'password': user.zerodha_password},
+        data={'user_id': login_user_id, 'password': user.zerodha_password},
         timeout=20,
     )
-    login_payload = json.loads(login_response.content)
+    try:
+        login_payload = json.loads(login_response.content)
+    except ValueError:
+        raise ValueError('Login failed: unexpected response from Zerodha login API.')
     request_id = ((login_payload.get('data') or {}).get('request_id'))
     if not request_id:
-        raise ValueError('Login failed while submitting Zerodha credentials.')
-    current_totp = pyotp.TOTP(user.zerodha_totp_key).now()
+        raise ValueError('Login failed while submitting Zerodha credentials: {0}'.format(login_payload.get('message', 'request_id missing')))
+    normalized_totp_key = ''.join((user.zerodha_totp_key or '').split())
+    current_totp = pyotp.TOTP(normalized_totp_key).now()
     twofa_response = session.post(
         'https://kite.zerodha.com/api/twofa',
         data={
-            'user_id': user.user_id,
+            'user_id': login_user_id,
             'request_id': request_id,
             'twofa_value': current_totp,
         },
         timeout=20,
     )
-    twofa_payload = twofa_response.json()
+    try:
+        twofa_payload = twofa_response.json()
+    except ValueError:
+        raise ValueError('2FA failed: unexpected response from Zerodha 2FA API.')
     if twofa_payload.get('status') != 'success':
-        raise ValueError('2FA failed while automating Zerodha login.')
+        raise ValueError('2FA failed while automating Zerodha login: {0}'.format(twofa_payload.get('message', 'unknown error')))
     final_response = session.get(login_page_url, allow_redirects=True, timeout=20)
     if 'request_token' not in final_response.url:
         raise ValueError('Unable to obtain request token from Zerodha redirect URL.')
@@ -229,7 +237,11 @@ def _automated_kite_login(user):
     kite = _make_kite(user.api_key)
     session_data = kite.generate_session(request_token, api_secret=user.api_secret)
     _persist_token_data(user, session_data)
-    _sync_profile_from_kite(user)
+    try:
+        _sync_profile_from_kite(user)
+    except (KiteException, TokenException):
+        # Keep auth successful when token acquisition worked; profile sync can be retried later.
+        pass
 
 
 def _start_reauthentication(request, user):

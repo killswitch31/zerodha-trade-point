@@ -40,7 +40,7 @@ class KiteUser(models.Model):
     """A Zerodha Kite Connect user whose API credentials are persisted."""
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='kite_users', null=True)
     zk_user_id = models.CharField(max_length=24, unique=True, default=generate_kite_user_identifier)
-    api_key = models.CharField(max_length=64, unique=True)
+    api_key = models.CharField(max_length=64, unique=True, null=True, blank=True)
     api_secret = models.CharField(max_length=128, blank=True, default='')
     access_token = models.CharField(max_length=128, blank=True, default='')
     refresh_token = models.CharField(max_length=128, blank=True, default='')

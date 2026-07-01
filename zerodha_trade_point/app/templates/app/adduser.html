@@ -68,14 +68,20 @@
                     <span class="real-value" style="display:none;">{{ r.user.zerodha_totp_key|default:"-" }}</span>
                     <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
                 </td>
-                <td><code style="font-size:11px; word-break:break-all;">{{ r.user.api_key }}</code></td>
+                <td>
+                    {% if r.user.api_key %}
+                    <code style="font-size:11px; word-break:break-all;">{{ r.user.api_key }}</code>
+                    {% else %}
+                    <span class="text-muted">-</span>
+                    {% endif %}
+                </td>
                 <td>
                     <span class="masked-value">••••••••••</span>
                     <span class="real-value" style="display:none;">{{ r.user.api_secret|default:"-" }}</span>
                     <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
                 </td>
                 <td>{{ r.user.automate }}</td>
-                <td data-token-key="{{ r.user.api_key }}">
+                <td data-token-key="{{ r.user.zk_user_id }}">
                     <span class="label {{ r.presentation.css }}">{{ r.presentation.label }}</span>
                     <div class="help-block" style="margin:4px 0 0 0; font-size:11px;" data-token-checked-at>
                         Last checked: {{ r.checked_at|date:"Y-m-d H:i:s" }}
@@ -95,19 +101,23 @@
                         <div class="row" style="margin:0;">
                             <div class="col-sm-2" style="padding:0 10px 8px 0;">
                                 <label>API KEY</label>
-                                <input type="text" name="api_key" class="form-control" value="{{ r.user.api_key }}" />
+                                <input type="text" name="api_key" class="form-control" value="{{ r.user.api_key|default:'' }}" />
+                                <label class="checkbox-inline" style="margin-top:4px;"><input type="checkbox" name="clear_api_key" value="1" /> Clear</label>
                             </div>
                             <div class="col-sm-2" style="padding:0 10px 8px 0;">
                                 <label>API Secret</label>
                                 <input type="password" name="api_secret" class="form-control" placeholder="Leave blank to keep current" />
+                                <label class="checkbox-inline" style="margin-top:4px;"><input type="checkbox" name="clear_api_secret" value="1" /> Clear</label>
                             </div>
                             <div class="col-sm-2" style="padding:0 10px 8px 0;">
                                 <label>Zerodha Password</label>
                                 <input type="password" name="zerodha_password" class="form-control" placeholder="Leave blank to keep current" />
+                                <label class="checkbox-inline" style="margin-top:4px;"><input type="checkbox" name="clear_zerodha_password" value="1" /> Clear</label>
                             </div>
                             <div class="col-sm-2" style="padding:0 10px 8px 0;">
                                 <label>Zerodha TOTP KEY</label>
                                 <input type="password" name="zerodha_totp_key" class="form-control" placeholder="Leave blank to keep current" />
+                                <label class="checkbox-inline" style="margin-top:4px;"><input type="checkbox" name="clear_zerodha_totp_key" value="1" /> Clear</label>
                             </div>
                             <div class="col-sm-2" style="padding:0 10px 8px 0;">
                                 <label>Automate</label>
@@ -188,7 +198,7 @@
         }
 
         function updateStatusCells(data) {
-            var statuses = data.statuses || {};
+            var statuses = data.statuses_by_id || {};
             document.querySelectorAll('[data-token-key]').forEach(function (cell) {
                 var info = statuses[cell.getAttribute('data-token-key')];
                 if (!info) { return; }

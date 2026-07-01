@@ -396,7 +396,8 @@ def token_statuses(request):
             'checked_at': row['checked_at'].isoformat(),
             'checked_at_display': row['checked_at'].strftime('%Y-%m-%d %H:%M:%S'),
         }
-        statuses[row['user'].api_key] = payload
+        if row['user'].api_key:
+            statuses[row['user'].api_key] = payload
         statuses_by_id[row['user'].zk_user_id] = payload
     return JsonResponse({'statuses': statuses, 'statuses_by_id': statuses_by_id})
 
@@ -426,7 +427,7 @@ def configurezkauth(request):
         user = get_object_or_404(KiteUser, zk_user_id=reauth_id)
         if not is_admin(request.user) and user.owner_id != request.user.id:
             return redirect('configurezkauth')
-        if not user.api_secret:
+        if not user.api_key or not user.api_secret:
             return redirect('configurezkauth')
         try:
             next_url = _start_reauthentication(request, user)
@@ -457,8 +458,17 @@ def configurezkauth(request):
                 new_password = (edit_form.cleaned_data.get('zerodha_password') or '').strip()
                 new_totp = (edit_form.cleaned_data.get('zerodha_totp_key') or '').strip()
                 new_automate = edit_form.cleaned_data.get('automate')
+                clear_api_key = edit_form.cleaned_data.get('clear_api_key')
+                clear_api_secret = edit_form.cleaned_data.get('clear_api_secret')
+                clear_password = edit_form.cleaned_data.get('clear_zerodha_password')
+                clear_totp = edit_form.cleaned_data.get('clear_zerodha_totp_key')
+                token_binding_changed = False
 
-                if new_api_key and new_api_key != user.api_key:
+                if clear_api_key:
+                    if user.api_key is not None:
+                        user.api_key = None
+                        token_binding_changed = True
+                elif new_api_key and new_api_key != user.api_key:
                     exists = KiteUser.objects.exclude(pk=user.pk).filter(api_key=new_api_key).exists()
                     if exists:
                         context['page_message'] = 'API key is already in use by another Zerodha user.'
@@ -467,15 +477,29 @@ def configurezkauth(request):
                         context['rows'] = _user_rows(request.user, owner_filter)
                         return render(request, 'app/adduser.html', context)
                     user.api_key = new_api_key
+                    token_binding_changed = True
 
-                if new_api_secret:
+                if clear_api_secret:
+                    if user.api_secret:
+                        user.api_secret = ''
+                        token_binding_changed = True
+                elif new_api_secret:
                     user.api_secret = new_api_secret
-                if new_password:
+                    token_binding_changed = True
+                if clear_password:
+                    user.zerodha_password = ''
+                elif new_password:
                     user.zerodha_password = new_password
-                if new_totp:
+                if clear_totp:
+                    user.zerodha_totp_key = ''
+                elif new_totp:
                     user.zerodha_totp_key = new_totp
                 if new_automate in (0, 1):
                     user.automate = new_automate
+
+                if token_binding_changed:
+                    user.access_token = ''
+                    user.refresh_token = ''
 
                 user.save()
                 context['page_message'] = 'Zerodha credentials updated successfully for {0}.'.format(user.zk_user_id)

@@ -198,6 +198,42 @@ class ConfigureZkAuthEditCredentialsTests(TestCase):
         self.kite_user.refresh_from_db()
         self.assertEqual(self.kite_user.automate, 1)
 
+    @patch('app.views._auth_status', return_value='active')
+    def test_owner_can_clear_configured_sensitive_values(self, _mock_status):
+        response = self._post_edit(self.user, {
+            'action': 'edit_credentials',
+            'zk_user_id': self.kite_user.zk_user_id,
+            'api_key': 'owner-api',
+            'api_secret': '',
+            'zerodha_password': '',
+            'zerodha_totp_key': '',
+            'automate': '1',
+            'clear_api_secret': '1',
+            'clear_zerodha_password': '1',
+            'clear_zerodha_totp_key': '1',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.kite_user.refresh_from_db()
+        self.assertEqual(self.kite_user.api_secret, '')
+        self.assertEqual(self.kite_user.zerodha_password, '')
+        self.assertEqual(self.kite_user.zerodha_totp_key, '')
+
+    @patch('app.views._auth_status', return_value='active')
+    def test_owner_can_clear_api_key(self, _mock_status):
+        response = self._post_edit(self.user, {
+            'action': 'edit_credentials',
+            'zk_user_id': self.kite_user.zk_user_id,
+            'api_key': '',
+            'api_secret': '',
+            'zerodha_password': '',
+            'zerodha_totp_key': '',
+            'automate': '0',
+            'clear_api_key': '1',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.kite_user.refresh_from_db()
+        self.assertIsNone(self.kite_user.api_key)
+
 
 class ConfigureZkAuthReauthModeTests(TestCase):
     def setUp(self):

@@ -121,6 +121,10 @@ class EditKiteCredentialsForm(forms.Form):
         choices=(('0', '0'), ('1', '1')),
         widget=forms.Select({'class': 'form-control'})
     )
+    clear_api_key = forms.BooleanField(required=False)
+    clear_api_secret = forms.BooleanField(required=False)
+    clear_zerodha_password = forms.BooleanField(required=False)
+    clear_zerodha_totp_key = forms.BooleanField(required=False)
 
     def clean_automate(self):
         raw = self.cleaned_data.get('automate', '')

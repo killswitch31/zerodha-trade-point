@@ -121,6 +121,7 @@ For production, in file `zerodha_trade_point/settings.py`, revert to secure valu
 - Set `SECURE_SSL_REDIRECT = True`
 - Set `SESSION_COOKIE_SECURE = True`
 - Set `CSRF_COOKIE_SECURE = True`
+- Revert `SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default='<random_uuid>')` to `SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default=None)`
 
 ### 7. Start application
 

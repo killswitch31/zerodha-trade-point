@@ -150,32 +150,18 @@ Open:
 
 ### 8. Run tests and coverage
 
-Install developer-only tooling:
+Detailed testing and coverage documentation lives in [TESTING.md](TESTING.md).
+
+Quick commands:
 
 ```bash
 pip install -r ../requirements-dev.txt
-```
-
-Run the app test suite:
-
-```bash
 python manage.py test app.tests
-```
-
-Run coverage and print a terminal report:
-
-```bash
 coverage run manage.py test app.tests
 coverage report
+coverage run --rcfile ../.coveragerc manage.py test app.tests
+coverage report --rcfile ../.coveragerc
 ```
-
-If you want an HTML report:
-
-```bash
-coverage html
-```
-
-Then open `htmlcov/index.html` in your browser.
 
 ## **Deploy To Azure App Service**
 

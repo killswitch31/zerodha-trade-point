@@ -18,12 +18,23 @@ SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default=None)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-ALLOWED_HOSTS = [
-    os.getenv('WEBSITE_HOSTNAME', '127.0.0.1'),
-    'zerodha_trade_point.azurewebsites.net',
-]
+def _csv_env_list(name, default=''):
+    """Returns a trimmed list from a comma-separated env var."""
+    raw = os.environ.get(name, default)
+    return [item.strip() for item in raw.split(',') if item.strip()]
+
+
+website_hostname = os.getenv('WEBSITE_HOSTNAME', '').strip()
+allowed_hosts = set(_csv_env_list('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost'))
+if website_hostname:
+    allowed_hosts.add(website_hostname)
+ALLOWED_HOSTS = sorted(allowed_hosts)
+
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-CSRF_TRUSTED_ORIGINS = ['https://zerodha_trade_point.azurewebsites.net']
+csrf_trusted_origins = set(_csv_env_list('DJANGO_CSRF_TRUSTED_ORIGINS', ''))
+if website_hostname:
+    csrf_trusted_origins.add('https://{0}'.format(website_hostname))
+CSRF_TRUSTED_ORIGINS = sorted(csrf_trusted_origins)
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_SSL_REDIRECT = True
@@ -117,6 +128,12 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/stable/howto/static-files/
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# Login CAPTCHA via Cloudflare Turnstile.
+TURNSTILE_SITE_KEY = os.environ.get('TURNSTILE_SITE_KEY', '').strip()
+TURNSTILE_SECRET_KEY = os.environ.get('TURNSTILE_SECRET_KEY', '').strip()
+LOGIN_RATE_LIMIT_ATTEMPTS = int(os.environ.get('LOGIN_RATE_LIMIT_ATTEMPTS', '5'))
+LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get('LOGIN_RATE_LIMIT_WINDOW_SECONDS', '900'))
 
 # Kite Connect (Zerodha) API credentials.
 # Set these via environment variables; never commit real secrets.

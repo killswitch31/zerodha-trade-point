@@ -148,7 +148,43 @@ Open:
 - App: `http://127.0.0.1:8000/`
 - Admin: `http://127.0.0.1:8000/admin/`
 
+### 8. Run tests and coverage
+
+Install developer-only tooling:
+
+```bash
+pip install -r ../requirements-dev.txt
+```
+
+Run the app test suite:
+
+```bash
+python manage.py test app.tests
+```
+
+Run coverage and print a terminal report:
+
+```bash
+coverage run manage.py test app.tests
+coverage report
+```
+
+If you want an HTML report:
+
+```bash
+coverage html
+```
+
+Then open `htmlcov/index.html` in your browser.
+
 ## **Deploy To Azure App Service**
+
+You can deploy this project to an Azure Web App named `<YOUR_WEBAPP_NAME>` even though the Django project package is named `zerodha_trade_point`.
+
+Important distinction:
+
+- Azure Web App name: `<YOUR_WEBAPP_NAME>`
+- Django WSGI module: `zerodha_trade_point.wsgi:application`
 
 Use your own values for subscription, resource group, plan, and app name.
 
@@ -204,11 +240,27 @@ az webapp config appsettings set \
 	--resource-group <YOUR_RESOURCE_GROUP> \
 	--settings \
 		DJANGO_ALLOWED_HOSTS="<YOUR_WEBAPP_NAME>.azurewebsites.net" \
+		DJANGO_CSRF_TRUSTED_ORIGINS="https://<YOUR_WEBAPP_NAME>.azurewebsites.net" \
 		DJANGO_SECRET_KEY="<YOUR_STRONG_SECRET_KEY>" \
+		LOGIN_RATE_LIMIT_ATTEMPTS="5" \
+		LOGIN_RATE_LIMIT_WINDOW_SECONDS="900" \
 		SCM_DO_BUILD_DURING_DEPLOYMENT="true"
 ```
 
 `SCM_DO_BUILD_DURING_DEPLOYMENT=true` ensures App Service runs build steps during deployment in production.
+
+The login page supports Cloudflare Turnstile. To enable strong CAPTCHA on `/login`, also set:
+
+```bash
+az webapp config appsettings set \
+	--name <YOUR_WEBAPP_NAME> \
+	--resource-group <YOUR_RESOURCE_GROUP> \
+	--settings \
+		TURNSTILE_SITE_KEY="<YOUR_TURNSTILE_SITE_KEY>" \
+		TURNSTILE_SECRET_KEY="<YOUR_TURNSTILE_SECRET_KEY>"
+```
+
+If `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` are not set, login continues to work without the CAPTCHA widget.
 
 If needed, also set Zerodha config values:
 
@@ -223,14 +275,22 @@ az webapp config appsettings set \
 
 ### 6. Configure startup command
 
-This project WSGI module is `zerodha_trade_point.wsgi`.
+This project WSGI module is `zerodha_trade_point.wsgi:application`.
 
 ```bash
 az webapp config set \
 	--name <YOUR_WEBAPP_NAME> \
 	--resource-group <YOUR_RESOURCE_GROUP> \
-	--startup-file "gunicorn zerodha_trade_point.wsgi --bind=0.0.0.0:8000 --workers=2 --timeout=120"
+	--startup-file "gunicorn zerodha_trade_point.wsgi:application --bind=0.0.0.0:8000 --workers=2 --timeout=120"
 ```
+
+If your Azure Web App name is `<YOUR_WEBAPP_NAME>`, the startup command is still:
+
+```bash
+gunicorn zerodha_trade_point.wsgi:application --bind=0.0.0.0:8000 --workers=2 --timeout=120
+```
+
+Do not change it to `gunicorn <YOUR_WEBAPP_NAME>.wsgi`; `<YOUR_WEBAPP_NAME>` is the Azure site name, not a Python module.
 
 ### 7. Deploy code
 
@@ -254,7 +314,8 @@ az webapp browse --name <YOUR_WEBAPP_NAME> --resource-group <YOUR_RESOURCE_GROUP
 
 - Use your own placeholders, not fixed values.
 - `az webapp config appsettings set` is the standard command for environment variables.
-- Startup module should be `zerodha_trade_point.wsgi` (not `mysite.wsgi`).
+- Startup module should be `zerodha_trade_point.wsgi:application`.
+- `<YOUR_WEBAPP_NAME>` can be the Azure Web App name, but it must not be used as the Gunicorn Python module path.
 - Keep app name consistent in all commands (`<YOUR_WEBAPP_NAME>`).
 
 ## Authentication And Core Data Model

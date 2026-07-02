@@ -1,0 +1,2 @@
+-r zerodha_trade_point/requirements.txt
+coverage==7.10.1

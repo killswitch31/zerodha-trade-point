@@ -1,0 +1,12 @@
+[run]
+branch = True
+source =
+    app
+omit =
+    */migrations/*
+    */tests.py
+
+[report]
+show_missing = True
+skip_covered = False
+precision = 2

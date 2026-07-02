@@ -306,6 +306,10 @@ az webapp browse --name <YOUR_WEBAPP_NAME> --resource-group <YOUR_RESOURCE_GROUP
 
 ## Authentication And Core Data Model
 
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
+
 ### Entities and relationships
 
 - Django `User`: app login account.

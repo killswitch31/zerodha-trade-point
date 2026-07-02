@@ -90,6 +90,26 @@ Method B (from Django admin):
 
 For local HTTP development with `runserver`, update these values temporarily in file `zerodha_trade_point/settings.py`:
 
+- Generate a random UUID for local fallback secret key:
+
+```bash
+python -c "import uuid; print(uuid.uuid4())"
+```
+
+- In `zerodha_trade_point/settings.py` line 16, replace:
+
+```python
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default=None)
+```
+
+with:
+
+```python
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default='<random_uuid>')
+```
+
+- Use the generated UUID value in place of `<random_uuid>`.
+
 - Set `DEBUG = True`
 - Set `SECURE_SSL_REDIRECT = False`
 - Set `SESSION_COOKIE_SECURE = False`

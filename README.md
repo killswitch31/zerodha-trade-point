@@ -2,10 +2,47 @@
 
 > Disclaimer:
 > This project is intended only for managing your own Zerodha account and accounts of your close family members. Do not use this application to manage Zerodha accounts belonging to unrelated individuals or third parties.
+> This project does not support algorithmic trading or automated order execution.
 
 Django application to manage multiple Zerodha Kite accounts, role-based app users, and a browser-based trade dashboard.
 
 This application is built using Python v3.14.
+
+## Project Structure
+
+```text
+Zerodha-Trade-Point/
+├── README.md
+├── TESTING.md
+├── LICENSE
+├── requirements-dev.txt
+├── .coveragerc
+├── .github/
+│   └── workflows/
+│       └── tests.yml
+└── zerodha_trade_point/
+	├── manage.py
+	├── requirements.txt
+	├── startup.sh
+	├── db.sqlite3
+	├── app/
+	│   ├── models.py
+	│   ├── views.py
+	│   ├── forms.py
+	│   ├── tests.py
+	│   ├── middleware.py
+	│   ├── context_processors.py
+	│   ├── migrations/
+	│   ├── templates/
+	│   │   └── app/
+	│   └── static/
+	│       └── app/
+	├── staticfiles/
+	└── zerodha_trade_point/
+		├── settings.py
+		├── urls.py
+		└── wsgi.py
+```
 
 ## **Clone And Run Locally**
 
@@ -400,6 +437,13 @@ Redirect URL to configure in Zerodha app is shown on this page and can be copied
 4. Use `Refresh Trade Data` to fetch latest profile, orders, holdings, positions, and margin snapshot.
 
 ### Place order panel
+
+This application only supports placing, modifying, and cancelling orders with the following values:
+
+- Product: `CNC` / `MIS`
+- Validity: `DAY`
+- Order Type: `MARKET` / `LIMIT`
+- Variety: `REGULAR`
 
 - Choose side: `BUY` or `SELL`.
 - Choose exchange: `NSE` or `BSE`.

@@ -22,21 +22,6 @@
     <span id="refreshCountdown" class="text-muted" style="margin-left:12px;"></span>
 </form>
 
-{% if banner or error %}
-<div class="modal fade" id="msgModal" tabindex="-1" role="dialog">
-    <div class="modal-dialog" role="document">
-        <div class="modal-content">
-            <div class="modal-header">
-                <button type="button" class="close" data-dismiss="modal">&times;</button>
-                <h4 class="modal-title">{% if banner_level == 'success' %}Success{% else %}Error{% endif %}</h4>
-            </div>
-            <div class="modal-body"><p>{{ banner }}{{ error }}</p></div>
-            <div class="modal-footer"><button type="button" class="btn btn-primary" data-dismiss="modal">OK</button></div>
-        </div>
-    </div>
-</div>
-{% endif %}
-
 {% if selected %}
 <hr/>
 <h3>
@@ -61,6 +46,45 @@
     <div class="col-md-2"><strong>Live Balance:</strong> <span id="liveBalanceValue">{{ live_balance }}</span></div>
     <div class="col-md-2"><strong>Cash:</strong> <span id="cashValue">{{ cash }}</span></div>
     <div class="col-md-2"><strong>Debits:</strong> <span id="debitsValue">{{ debits }}</span></div>
+</div>
+
+<div id="orderStatusMessages" style="margin-top:15px;">
+    {% if order_status_messages %}
+    <div class="alert alert-info" role="alert">
+        <strong>Order status updates:</strong>
+        <ul style="margin-top:8px; margin-bottom:0; padding-left:18px;">
+            {% for msg in order_status_messages %}
+            <li>
+                {% if msg.order_id %}Order {{ msg.order_id }}: {% endif %}
+                {% if msg.status %}<strong>{{ msg.status }}</strong>{% endif %}
+                {% if msg.status and msg.status_message %} - {% endif %}
+                {{ msg.status_message }}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
+
+<div id="chartWidgetControls" style="margin-top:15px; max-width:1200px;">
+    <button type="button" id="loadTradingViewWidget" class="btn btn-info">Load TradingView Chart</button>
+    <p class="text-muted" style="margin-top:8px; margin-bottom:0;">
+        Disclaimer: This chart supports only BSE listed securities. It does not support NSE listed securities. If an NSE listed security is searched from within the widget, open it in a new TradingView tab.
+    </p>
+</div>
+
+<div id="tradingViewWidgetPanel" class="panel panel-default" style="display:none; margin-top:12px; max-width:1200px; height:800px; flex-direction:column;">
+    <div class="panel-heading" style="display:flex; align-items:center; justify-content:space-between;">
+        <strong>TradingView Chart</strong>
+        <button type="button" class="btn btn-default btn-xs" id="closeTradingViewWidgetTop">Close</button>
+    </div>
+    <div class="panel-body" style="padding:10px 10px 10px 44px; position:relative; flex:1; min-height:0;">
+        <button type="button" class="btn btn-default btn-xs" id="closeTradingViewWidgetLeft" style="position:absolute; left:8px; top:50%; transform:translateY(-50%); z-index:5;">Close</button>
+        <div id="tradingViewWidgetMount" style="height:100%; width:100%;"></div>
+    </div>
+    <div class="panel-footer text-left">
+        <button type="button" class="btn btn-default btn-xs" id="closeTradingViewWidgetBottom">Close</button>
+    </div>
 </div>
 
 <h4>Place order</h4>
@@ -95,6 +119,12 @@
             <button type="submit" id="po_submit" class="btn btn-success btn-block">Buy</button>
         </form>
     </div>
+</div>
+
+<div id="placeResponseBottom" style="margin-top:10px; max-width:420px;">
+    {% if banner or error %}
+    <div class="alert {% if banner_level == 'success' %}alert-success{% else %}alert-danger{% endif %}" role="alert">{{ banner }}{{ error }}</div>
+    {% endif %}
 </div>
 
 <div id="modifyModal" class="modal fade" tabindex="-1" role="dialog">
@@ -145,73 +175,85 @@
 
 <h4 id="openOrdersHeading">Open orders ({{ open_orders|length }})</h4>
 <table id="openOrdersTable" class="table table-condensed">
-    <thead><tr><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Product</th><th>Order type</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Actions</th><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Filled</th><th>Pending</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Trigger price</th><th>Average price</th><th>Product</th><th>Order type</th></tr></thead>
     <tbody>
     {% for o in open_orders %}
         <tr>
-            <td>{{ o.order_id }}</td>
-            <td>{{ o.tradingsymbol }}</td>
-            <td class="{% if o.transaction_type == 'BUY' %}text-success{% else %}text-danger{% endif %}">{{ o.transaction_type }}</td>
-            <td>{{ o.quantity }}</td>
-            <td>{{ o.order_timestamp }}</td>
-            <td>{{ o.exchange }}</td>
-            <td>{{ o.price }}</td>
-            <td>{{ o.product }}</td>
-            <td>{{ o.order_type }}</td>
             <td>
                 <button type="button" class="btn btn-warning btn-sm" onclick="modifyOrder(this)" data-id="{{ o.order_id }}" data-ex="{{ o.exchange }}" data-sym="{{ o.tradingsymbol }}" data-side="{{ o.transaction_type }}" data-qty="{{ o.quantity }}" data-type="{{ o.order_type }}" data-price="{{ o.price }}" data-product="{{ o.product }}">Modify</button>
                 <form method="post" action="{% url 'trade_cancel' %}" style="display:inline;" onsubmit="return confirm('Cancel order?');">{% csrf_token %}<input type="hidden" name="api_key" value="{{ selected }}"/><input type="hidden" name="order_id" value="{{ o.order_id }}"/><button class="btn btn-danger btn-sm">Cancel</button></form>
             </td>
+            <td>{{ o.order_id }}</td>
+            <td>{{ o.tradingsymbol }}</td>
+            <td class="{% if o.transaction_type == 'BUY' %}text-success{% else %}text-danger{% endif %}">{{ o.transaction_type }}</td>
+            <td>{{ o.quantity }}</td>
+            <td>{{ o.filled_quantity }}</td>
+            <td>{{ o.pending_quantity }}</td>
+            <td>{{ o.order_timestamp }}</td>
+            <td>{{ o.exchange }}</td>
+            <td>{{ o.price }}</td>
+            <td>{{ o.trigger_price }}</td>
+            <td>{{ o.average_price }}</td>
+            <td>{{ o.product }}</td>
+            <td>{{ o.order_type }}</td>
         </tr>
-    {% empty %}<tr><td colspan="10">None</td></tr>{% endfor %}
+    {% empty %}<tr><td colspan="14">None</td></tr>{% endfor %}
     </tbody>
 </table>
 
 <h4 id="executedOrdersHeading">Executed orders ({{ executed_orders|length }})</h4>
 <table id="executedOrdersTable" class="table table-condensed">
-    <thead><tr><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Product</th><th>Order type</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Actions</th><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Filled</th><th>Pending</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Trigger price</th><th>Average price</th><th>Product</th><th>Order type</th></tr></thead>
     <tbody>
     {% for o in executed_orders %}
         <tr>
+            <td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="{{ o.exchange }}" data-sym="{{ o.tradingsymbol }}" data-side="{{ o.transaction_type }}" data-qty="{{ o.quantity }}" data-type="{{ o.order_type }}" data-price="{{ o.price }}" data-product="{{ o.product }}">Place again</button></td>
             <td>{{ o.order_id }}</td>
             <td>{{ o.tradingsymbol }}</td>
             <td class="{% if o.transaction_type == 'BUY' %}text-success{% else %}text-danger{% endif %}">{{ o.transaction_type }}</td>
             <td>{{ o.quantity }}</td>
+            <td>{{ o.filled_quantity }}</td>
+            <td>{{ o.pending_quantity }}</td>
             <td>{{ o.order_timestamp }}</td>
             <td>{{ o.exchange }}</td>
             <td>{{ o.price }}</td>
+            <td>{{ o.trigger_price }}</td>
+            <td>{{ o.average_price }}</td>
             <td>{{ o.product }}</td>
             <td>{{ o.order_type }}</td>
-            <td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="{{ o.exchange }}" data-sym="{{ o.tradingsymbol }}" data-side="{{ o.transaction_type }}" data-qty="{{ o.quantity }}" data-type="{{ o.order_type }}" data-price="{{ o.price }}" data-product="{{ o.product }}">Place again</button></td>
         </tr>
-    {% empty %}<tr><td colspan="10">None</td></tr>{% endfor %}
+    {% empty %}<tr><td colspan="14">None</td></tr>{% endfor %}
     </tbody>
 </table>
 
 <h4 id="cancelledOrdersHeading">Cancelled orders ({{ cancelled_orders|length }})</h4>
 <table id="cancelledOrdersTable" class="table table-condensed">
-    <thead><tr><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Product</th><th>Order type</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Actions</th><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Filled</th><th>Pending</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Trigger price</th><th>Average price</th><th>Product</th><th>Order type</th></tr></thead>
     <tbody>
     {% for o in cancelled_orders %}
         <tr>
+            <td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="{{ o.exchange }}" data-sym="{{ o.tradingsymbol }}" data-side="{{ o.transaction_type }}" data-qty="{{ o.quantity }}" data-type="{{ o.order_type }}" data-price="{{ o.price }}" data-product="{{ o.product }}">Place again</button></td>
             <td>{{ o.order_id }}</td>
             <td>{{ o.tradingsymbol }}</td>
             <td class="{% if o.transaction_type == 'BUY' %}text-success{% else %}text-danger{% endif %}">{{ o.transaction_type }}</td>
             <td>{{ o.quantity }}</td>
+            <td>{{ o.filled_quantity }}</td>
+            <td>{{ o.pending_quantity }}</td>
             <td>{{ o.order_timestamp }}</td>
             <td>{{ o.exchange }}</td>
             <td>{{ o.price }}</td>
+            <td>{{ o.trigger_price }}</td>
+            <td>{{ o.average_price }}</td>
             <td>{{ o.product }}</td>
             <td>{{ o.order_type }}</td>
-            <td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="{{ o.exchange }}" data-sym="{{ o.tradingsymbol }}" data-side="{{ o.transaction_type }}" data-qty="{{ o.quantity }}" data-type="{{ o.order_type }}" data-price="{{ o.price }}" data-product="{{ o.product }}">Place again</button></td>
         </tr>
-    {% empty %}<tr><td colspan="10">None</td></tr>{% endfor %}
+    {% empty %}<tr><td colspan="14">None</td></tr>{% endfor %}
     </tbody>
 </table>
 
 <h4>Holdings ({{ holdings|length }})</h4>
 <table id="holdingsTable" class="table table-condensed">
-    <thead><tr><th>Security</th><th>Exchange</th><th>Qty</th><th>Avg price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
+    <thead><tr><th>Security</th><th>Exchange</th><th>Qty</th><th>Average price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
     <tbody>
     {% for h in holdings %}
         <tr>
@@ -229,7 +271,7 @@
 
 <h4>Positions ({{ positions|length }})</h4>
 <table id="positionsTable" class="table table-condensed">
-    <thead><tr><th>Security</th><th>Exchange</th><th>Product</th><th>Qty</th><th>Avg price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
+    <thead><tr><th>Security</th><th>Exchange</th><th>Product</th><th>Qty</th><th>Average price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
     <tbody>
     {% for p in positions %}
         <tr>
@@ -263,9 +305,9 @@
         }
         var apiKey = statusCell.getAttribute('data-token-key');
         var owner = new URLSearchParams(window.location.search).get('owner') || '';
-        var tokenUrl = '{% url 'token_statuses' %}' + (owner ? ('?owner=' + encodeURIComponent(owner)) : '');
-        var tradeUrl = '{% url 'trade_refresh_data' %}';
-        var cancelUrl = '{% url 'trade_cancel' %}';
+        var tokenUrl = "{% url 'token_statuses' %}" + (owner ? ('?owner=' + encodeURIComponent(owner)) : '');
+        var tradeUrl = "{% url 'trade_refresh_data' %}";
+        var cancelUrl = "{% url 'trade_cancel' %}";
         var csrfToken = document.querySelector('[name=csrfmiddlewaretoken]') ? document.querySelector('[name=csrfmiddlewaretoken]').value : '';
         var refreshStatus = document.getElementById('refreshStatus');
         var refreshCountdown = document.getElementById('refreshCountdown');
@@ -310,6 +352,30 @@
             if (!refreshTradeButton) { return; }
             refreshTradeButton.disabled = !!loading;
             refreshTradeButton.textContent = loading ? 'Refreshing...' : 'Refresh Trade Data';
+        }
+
+        function renderOrderStatusMessages(messages) {
+            var container = document.getElementById('orderStatusMessages');
+            if (!container) { return; }
+            if (!messages || !messages.length) {
+                container.innerHTML = '';
+                return;
+            }
+            var items = messages.map(function (msg) {
+                var text = '';
+                if (msg.order_id) {
+                    text += 'Order ' + displayValue(msg.order_id) + ': ';
+                }
+                if (msg.status) {
+                    text += '<strong>' + displayValue(msg.status) + '</strong>';
+                }
+                if (msg.status && msg.status_message) {
+                    text += ' - ';
+                }
+                text += displayValue(msg.status_message);
+                return '<li>' + text + '</li>';
+            }).join('');
+            container.innerHTML = '<div class="alert alert-info" role="alert"><strong>Order status updates:</strong><ul style="margin-top:8px; margin-bottom:0; padding-left:18px;">' + items + '</ul></div>';
         }
 
         function updateRefreshStatus(message) {
@@ -366,6 +432,8 @@
                         updateStatus(data.selected_status);
                     }
 
+                    renderOrderStatusMessages(data.order_status_messages || []);
+
                     document.getElementById('openOrdersHeading').textContent = 'Open orders (' + (data.open_orders ? data.open_orders.length : 0) + ')';
                     document.getElementById('executedOrdersHeading').textContent = 'Executed orders (' + (data.executed_orders ? data.executed_orders.length : 0) + ')';
                     document.getElementById('cancelledOrdersHeading').textContent = 'Cancelled orders (' + (data.cancelled_orders ? data.cancelled_orders.length : 0) + ')';
@@ -403,15 +471,6 @@
 
                     var openOrdersHtml = (data.open_orders || []).map(function (o) {
                         return '<tr>' +
-                            '<td>' + displayValue(o.order_id) + '</td>' +
-                            '<td>' + displayValue(o.tradingsymbol) + '</td>' +
-                            '<td class="' + ((o.transaction_type === 'BUY') ? 'text-success' : 'text-danger') + '">' + displayValue(o.transaction_type) + '</td>' +
-                            '<td>' + displayValue(o.quantity) + '</td>' +
-                            '<td>' + displayValue(o.order_timestamp) + '</td>' +
-                            '<td>' + displayValue(o.exchange) + '</td>' +
-                            '<td>' + displayValue(o.price) + '</td>' +
-                            '<td>' + displayValue(o.product) + '</td>' +
-                            '<td>' + displayValue(o.order_type) + '</td>' +
                             '<td>' +
                                 '<button type="button" class="btn btn-warning btn-sm" onclick="modifyOrder(this)" data-id="' + displayValue(o.order_id) + '" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Modify</button>' +
                                 '<form method="post" action="' + cancelUrl + '" style="display:inline; margin-left:3px;" onsubmit="return confirm(\'Cancel order?\');">' +
@@ -421,44 +480,65 @@
                                     '<button class="btn btn-danger btn-sm" type="submit">Cancel</button>' +
                                 '</form>' +
                             '</td>' +
+                            '<td>' + displayValue(o.order_id) + '</td>' +
+                            '<td>' + displayValue(o.tradingsymbol) + '</td>' +
+                            '<td class="' + ((o.transaction_type === 'BUY') ? 'text-success' : 'text-danger') + '">' + displayValue(o.transaction_type) + '</td>' +
+                            '<td>' + displayValue(o.quantity) + '</td>' +
+                            '<td>' + displayValue(o.filled_quantity) + '</td>' +
+                            '<td>' + displayValue(o.pending_quantity) + '</td>' +
+                            '<td>' + displayValue(o.order_timestamp) + '</td>' +
+                            '<td>' + displayValue(o.exchange) + '</td>' +
+                            '<td>' + displayValue(o.price) + '</td>' +
+                            '<td>' + displayValue(o.trigger_price) + '</td>' +
+                            '<td>' + displayValue(o.average_price) + '</td>' +
+                            '<td>' + displayValue(o.product) + '</td>' +
+                            '<td>' + displayValue(o.order_type) + '</td>' +
                             '</tr>';
                     }).join('');
                     var openBody = document.querySelector('#openOrdersTable tbody');
-                    if (openBody) { openBody.innerHTML = openOrdersHtml || '<tr><td colspan="10">None</td></tr>'; }
+                            if (openBody) { openBody.innerHTML = openOrdersHtml || '<tr><td colspan="14">None</td></tr>'; }
 
                     var executedHtml = (data.executed_orders || []).map(function (o) {
                         return '<tr>' +
+                            '<td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Place again</button></td>' +
                             '<td>' + displayValue(o.order_id) + '</td>' +
                             '<td>' + displayValue(o.tradingsymbol) + '</td>' +
                             '<td class="' + ((o.transaction_type === 'BUY') ? 'text-success' : 'text-danger') + '">' + displayValue(o.transaction_type) + '</td>' +
                             '<td>' + displayValue(o.quantity) + '</td>' +
+                            '<td>' + displayValue(o.filled_quantity) + '</td>' +
+                            '<td>' + displayValue(o.pending_quantity) + '</td>' +
                             '<td>' + displayValue(o.order_timestamp) + '</td>' +
                             '<td>' + displayValue(o.exchange) + '</td>' +
                             '<td>' + displayValue(o.price) + '</td>' +
+                            '<td>' + displayValue(o.trigger_price) + '</td>' +
+                            '<td>' + displayValue(o.average_price) + '</td>' +
                             '<td>' + displayValue(o.product) + '</td>' +
                             '<td>' + displayValue(o.order_type) + '</td>' +
-                                '<td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Place again</button></td>' +
                             '</tr>';
                     }).join('');
                     var executedBody = document.querySelector('#executedOrdersTable tbody');
-                    if (executedBody) { executedBody.innerHTML = executedHtml || '<tr><td colspan="10">None</td></tr>'; }
+                    if (executedBody) { executedBody.innerHTML = executedHtml || '<tr><td colspan="14">None</td></tr>'; }
 
                     var cancelledHtml = (data.cancelled_orders || []).map(function (o) {
                         return '<tr>' +
+                            '<td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Place again</button></td>' +
                             '<td>' + displayValue(o.order_id) + '</td>' +
                             '<td>' + displayValue(o.tradingsymbol) + '</td>' +
                             '<td class="' + ((o.transaction_type === 'BUY') ? 'text-success' : 'text-danger') + '">' + displayValue(o.transaction_type) + '</td>' +
                             '<td>' + displayValue(o.quantity) + '</td>' +
+                            '<td>' + displayValue(o.filled_quantity) + '</td>' +
+                            '<td>' + displayValue(o.pending_quantity) + '</td>' +
                             '<td>' + displayValue(o.order_timestamp) + '</td>' +
                             '<td>' + displayValue(o.exchange) + '</td>' +
                             '<td>' + displayValue(o.price) + '</td>' +
+                            '<td>' + displayValue(o.trigger_price) + '</td>' +
+                            '<td>' + displayValue(o.average_price) + '</td>' +
                             '<td>' + displayValue(o.product) + '</td>' +
                             '<td>' + displayValue(o.order_type) + '</td>' +
-                                '<td><button type="button" class="btn btn-default btn-sm" onclick="replaceOrder(this)" data-ex="' + displayValue(o.exchange) + '" data-sym="' + displayValue(o.tradingsymbol) + '" data-side="' + displayValue(o.transaction_type) + '" data-qty="' + displayValue(o.quantity) + '" data-type="' + displayValue(o.order_type) + '" data-price="' + displayValue(o.price) + '" data-product="' + displayValue(o.product) + '">Place again</button></td>' +
                             '</tr>';
                     }).join('');
                     var cancelledBody = document.querySelector('#cancelledOrdersTable tbody');
-                    if (cancelledBody) { cancelledBody.innerHTML = cancelledHtml || '<tr><td colspan="10">None</td></tr>'; }
+                    if (cancelledBody) { cancelledBody.innerHTML = cancelledHtml || '<tr><td colspan="14">None</td></tr>'; }
                 })
                 .catch(function (error) {
                     console.error('Error refreshing trade data:', error);
@@ -474,6 +554,7 @@
                     }
                 });
         }
+            window.refreshTradeData = refreshTradeData;
 
         function startTokenPolling() {
             refreshTokenStatus();
@@ -513,6 +594,139 @@
         var sellBtn = document.getElementById('po_sell');
         var submit = document.getElementById('po_submit');
         var panel = document.getElementById('placePanel');
+        var responseBottom = document.getElementById('placeResponseBottom');
+        var responseClearTimer = null;
+        var chartButton = document.getElementById('loadTradingViewWidget');
+        var chartPanel = document.getElementById('tradingViewWidgetPanel');
+        var chartMount = document.getElementById('tradingViewWidgetMount');
+        var closeChartLeftBtn = document.getElementById('closeTradingViewWidgetLeft');
+        var closeChartTopBtn = document.getElementById('closeTradingViewWidgetTop');
+        var closeChartBottomBtn = document.getElementById('closeTradingViewWidgetBottom');
+
+        function clearTradingViewWidget() {
+            if (chartMount) {
+                chartMount.innerHTML = '';
+            }
+        }
+
+        function hideTradingViewWidget() {
+            clearTradingViewWidget();
+            if (chartPanel) {
+                chartPanel.style.display = 'none';
+            }
+        }
+
+        function buildTradingViewWidget(symbolCode) {
+            if (!chartMount) {
+                return;
+            }
+            clearTradingViewWidget();
+
+            var container = document.createElement('div');
+            container.className = 'tradingview-widget-container';
+            container.style.height = '100%';
+            container.style.width = '100%';
+
+            var widget = document.createElement('div');
+            widget.className = 'tradingview-widget-container__widget';
+            widget.style.height = 'calc(100% - 32px)';
+            widget.style.width = '100%';
+            container.appendChild(widget);
+
+            var copyright = document.createElement('div');
+            copyright.className = 'tradingview-widget-copyright';
+            copyright.innerHTML = '<a href="https://www.tradingview.com/symbols/BSE-SENSEX/" rel="noopener nofollow" target="_blank"><span class="blue-text">SENSEX chart</span></a><span class="trademark"> by TradingView</span>';
+            container.appendChild(copyright);
+
+            var script = document.createElement('script');
+            script.type = 'text/javascript';
+            script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+            script.async = true;
+            script.text = JSON.stringify({
+                allow_symbol_change: true,
+                calendar: false,
+                details: false,
+                hide_side_toolbar: true,
+                hide_top_toolbar: false,
+                hide_legend: false,
+                hide_volume: false,
+                hotlist: false,
+                interval: 'D',
+                locale: 'en',
+                save_image: true,
+                style: '1',
+                symbol: symbolCode,
+                theme: 'light',
+                timezone: 'Asia/Kolkata',
+                backgroundColor: '#ffffff',
+                gridColor: 'rgba(46, 46, 46, 0.06)',
+                watchlist: [],
+                withdateranges: true,
+                compareSymbols: [],
+                show_popup_button: true,
+                popup_height: '1000',
+                popup_width: '1200',
+                studies: [],
+                autosize: true
+            });
+            container.appendChild(script);
+
+            chartMount.appendChild(container);
+            if (chartPanel) {
+                chartPanel.style.display = 'flex';
+            }
+        }
+
+        function showPlaceResponse(message, success) {
+            var css = success ? 'alert-success' : 'alert-danger';
+            var html = '' +
+                '<div class="alert ' + css + '" role="alert" style="margin-bottom:0;">' +
+                    '<div><strong>Status:</strong> ' + (success ? 'success' : 'error') + '</div>' +
+                    '<div style="margin-top:6px;">' + message + '</div>' +
+                    '<div style="margin-top:10px;">' +
+                        '<button type="button" class="btn btn-default btn-xs" id="clearPlaceResponseBtn">OK</button>' +
+                    '</div>' +
+                '</div>';
+            if (responseBottom) { responseBottom.innerHTML = html; }
+            var clearBtn = document.getElementById('clearPlaceResponseBtn');
+            if (clearBtn) {
+                clearBtn.addEventListener('click', clearPlaceResponse);
+            }
+            if (responseClearTimer) {
+                clearTimeout(responseClearTimer);
+            }
+            responseClearTimer = setTimeout(clearPlaceResponse, 30000);
+        }
+
+        function clearPlaceResponse() {
+            if (responseClearTimer) {
+                clearTimeout(responseClearTimer);
+                responseClearTimer = null;
+            }
+            if (responseBottom) {
+                responseBottom.innerHTML = '';
+            }
+        }
+
+        if (chartButton) {
+            chartButton.addEventListener('click', function () {
+                buildTradingViewWidget('BSE:SENSEX');
+                if (chartPanel) {
+                    chartPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        }
+
+        if (closeChartLeftBtn) {
+            closeChartLeftBtn.addEventListener('click', hideTradingViewWidget);
+        }
+
+        if (closeChartTopBtn) {
+            closeChartTopBtn.addEventListener('click', hideTradingViewWidget);
+        }
+        if (closeChartBottomBtn) {
+            closeChartBottomBtn.addEventListener('click', hideTradingViewWidget);
+        }
 
         // BUY = green, SELL = red; recolor submit + panel.
         function setSide(side) {
@@ -597,16 +811,38 @@
             if (b.dataset.price) { price.value = b.dataset.price; }
             panel.scrollIntoView();
         };
-    })();
 
-    // Show order result as a dialog; strip msg/level so auto-refresh won't repeat it.
-    (function () {
-        var modal = document.getElementById('msgModal');
-        if (!modal) { return; }
-        $('#msgModal').modal('show');
-        var u = new URL(window.location.href);
-        u.searchParams.delete('msg'); u.searchParams.delete('level');
-        window.history.replaceState({}, '', u.toString());
+        place.addEventListener('submit', function (event) {
+            event.preventDefault();
+            submit.disabled = true;
+            fetch(place.action, {
+                method: 'POST',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json'
+                },
+                body: new FormData(place)
+            })
+                .then(function (response) {
+                    return response.json().then(function (payload) {
+                        return { ok: response.ok, payload: payload };
+                    });
+                })
+                .then(function (result) {
+                    var statusText = result.payload.status || (result.payload.ok ? 'success' : 'error');
+                    var responseText = 'Status: ' + statusText + '. ' + (result.payload.message || 'Unknown response from order API.');
+                    showPlaceResponse(responseText, !!result.payload.ok);
+                    if (window.refreshTradeData) {
+                        window.refreshTradeData();
+                    }
+                })
+                .catch(function () {
+                    showPlaceResponse('Status: error. Place failed: Unable to reach the server.', false);
+                })
+                .finally(function () {
+                    submit.disabled = false;
+                });
+        });
     })();
 </script>
 {% endblock %}

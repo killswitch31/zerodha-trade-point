@@ -1384,6 +1384,46 @@ class AdditionalHelperCoverageTests(TestCase):
         self.assertEqual(data['net'], 200)
         self.assertEqual(data['cash'], 25)
 
+    def test_trade_data_includes_order_price_quantity_and_status_message_fields(self):
+        class _KiteOrderStub:
+            def profile(self):
+                return {'user_name': 'Helper'}
+
+            def orders(self):
+                return [{
+                    'order_id': 'ORD123',
+                    'status': 'OPEN',
+                    'status_message': 'Order is pending at exchange',
+                    'price': '101.5',
+                    'trigger_price': '100',
+                    'average_price': '99.8',
+                    'quantity': '10',
+                    'filled_quantity': '3',
+                    'pending_quantity': '7',
+                }]
+
+            def margins(self):
+                return {'equity': {'available': {}, 'utilized': {}, 'net': '0'}}
+
+            def holdings(self):
+                return []
+
+            def positions(self):
+                return []
+
+        with patch('app.views._call_with_token_renewal', side_effect=lambda _user, operation: operation(_KiteOrderStub())):
+            data = _trade_data_for_user(self.owner_account)
+
+        self.assertEqual(len(data['open_orders']), 1)
+        self.assertEqual(data['open_orders'][0]['price'], 101.5)
+        self.assertEqual(data['open_orders'][0]['trigger_price'], 100)
+        self.assertEqual(data['open_orders'][0]['average_price'], 99.8)
+        self.assertEqual(data['open_orders'][0]['quantity'], 10)
+        self.assertEqual(data['open_orders'][0]['filled_quantity'], 3)
+        self.assertEqual(data['open_orders'][0]['pending_quantity'], 7)
+        self.assertEqual(data['order_status_messages'][0]['status'], 'OPEN')
+        self.assertEqual(data['order_status_messages'][0]['status_message'], 'Order is pending at exchange')
+
 
 class AdditionalTokenStatusAndTradeTests(TestCase):
     def setUp(self):

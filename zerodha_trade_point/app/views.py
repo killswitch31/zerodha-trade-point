@@ -572,6 +572,31 @@ def _normalize_position(position):
     return normalized
 
 
+def _normalize_order(order):
+    if not isinstance(order, dict):
+        return {}
+    normalized = dict(order)
+    for key in ('price', 'trigger_price', 'average_price', 'quantity', 'filled_quantity', 'pending_quantity'):
+        normalized[key] = _scalar_value(order.get(key))
+    return normalized
+
+
+def _order_status_messages(orders):
+    messages = []
+    for order in orders:
+        status_message = order.get('status_message')
+        if not status_message and order.get('status_message_raw'):
+            status_message = str(order.get('status_message_raw'))
+        if not status_message:
+            continue
+        messages.append({
+            'order_id': order.get('order_id'),
+            'status': order.get('status'),
+            'status_message': str(status_message),
+        })
+    return messages
+
+
 def _get_trade_user(api_key, request_user):
     qs = KiteUser.objects.exclude(access_token='')
     if not can_trade_all(request_user):
@@ -596,6 +621,7 @@ def _trade_data_for_user(user):
         profile = {}
     if not isinstance(orders, list):
         orders = []
+    orders = [_normalize_order(o) for o in orders if isinstance(o, dict)]
     if not isinstance(holdings, list):
         holdings = []
     if isinstance(positions_payload, dict):
@@ -621,6 +647,7 @@ def _trade_data_for_user(user):
         'open_orders': [o for o in orders if o.get('status') in open_statuses],
         'executed_orders': [o for o in orders if o.get('status') == 'COMPLETE'],
         'cancelled_orders': [o for o in orders if o.get('status') == 'CANCELLED'],
+        'order_status_messages': _order_status_messages(orders),
         'holdings': holdings,
         'positions': positions,
         'holdings_pnl': sum(_scalar_value(h.get('pnl', 0)) or 0 for h in holdings),
@@ -639,6 +666,7 @@ def _empty_trade_data():
         'open_orders': [],
         'executed_orders': [],
         'cancelled_orders': [],
+        'order_status_messages': [],
         'holdings': [],
         'positions': [],
         'holdings_pnl': 0,
@@ -890,14 +918,25 @@ def _place(kite, p):
 @login_required(login_url='login')
 def trade_place(request):
     """Places a new order for the selected user."""
+    wants_json = (
+        request.headers.get('x-requested-with') == 'XMLHttpRequest' or
+        'application/json' in request.headers.get('accept', '')
+    )
+
     api_key = request.POST.get('api_key', '')
     kite = _user_kite(api_key, request.user)
     if not kite:
+        if wants_json:
+            return JsonResponse({'ok': False, 'status': 'error', 'message': 'No authenticated user selected.'}, status=400)
         return _trade_redirect(api_key, 'error', 'No authenticated user selected.')
     try:
         order_id = _place(kite, request.POST)
+        if wants_json:
+            return JsonResponse({'ok': True, 'status': 'success', 'message': 'Order placed (ID {0}).'.format(order_id), 'order_id': order_id})
         return _trade_redirect(api_key, 'success', 'Order placed (ID {0}).'.format(order_id))
     except (KiteException, ValueError, KeyError) as ex:
+        if wants_json:
+            return JsonResponse({'ok': False, 'status': 'error', 'message': 'Place failed: {0}'.format(ex)}, status=400)
         return _trade_redirect(api_key, 'error', 'Place failed: {0}'.format(ex))
 
 

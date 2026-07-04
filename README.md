@@ -450,6 +450,21 @@ This application only supports placing, modifying, and cancelling orders with th
 - Search security symbol/name (autocomplete).
 - Enter quantity, product (`CNC`/`MIS`), order type (`MARKET`/`LIMIT`), and price when needed.
 
+### TradingView chart widget panel
+
+- A `Load TradingView Chart` button is available on `/trade/` above the place order section.
+- Clicking the button opens an embedded TradingView advanced chart panel in the same page.
+- The chart panel has close buttons at the top, left side, and bottom.
+- Popup dimensions used by the TradingView popup button are:
+	- Width: `1200`
+	- Height: `1000`
+
+Disclaimer:
+
+- The embedded chart supports only BSE listed securities.
+- NSE listed securities are not supported in the embedded panel.
+- If an NSE listed symbol is searched from within TradingView, open that symbol in a new TradingView tab.
+
 ### Open/Executed/Cancelled orders panels
 
 - Open orders: `Modify` or `Cancel`.

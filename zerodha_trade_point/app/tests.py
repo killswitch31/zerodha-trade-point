@@ -16,7 +16,7 @@ from app.forms import AddUserForm, BootstrapAuthenticationForm, ManageZkUserForm
 from app.models import KiteUser, Profile, generate_kite_user_identifier
 from app.context_processors import user_role
 from app.middleware import LoginRequiredMiddleware
-from app.views import token_statuses, configurezkauth, _kite_login_url, trade, _place, trade_modify, _trade_data_for_user, is_admin, can_trade_all, can_configure_accounts, _persist_token_data, _renew_access_token, _call_with_token_renewal, _auth_status, managezkusers, kite_callback, _scalar_value, _sum_numeric_values, _calculate_margin_used, _normalize_position, trade_refresh_data, deletezkuser, _user_kite, instruments_search, instruments_all, quote, _INSTRUMENTS_CACHE, trade_place, trade_cancel, _validate_circuit, _user_rows, _sync_profile_from_kite, _owner_choices, _make_kite, _get_instruments
+from app.views import token_statuses, configurezkauth, _kite_login_url, _kite_callback_url, trade, _place, trade_modify, _trade_data_for_user, is_admin, can_trade_all, can_configure_accounts, _persist_token_data, _renew_access_token, _call_with_token_renewal, _auth_status, managezkusers, kite_callback, _scalar_value, _sum_numeric_values, _calculate_margin_used, _normalize_position, trade_refresh_data, deletezkuser, _user_kite, instruments_search, instruments_all, quote, _INSTRUMENTS_CACHE, trade_place, trade_cancel, _validate_circuit, _user_rows, _sync_profile_from_kite, _owner_choices, _make_kite, _get_instruments, _get_trade_user
 
 
 class AddUserFormTests(TestCase):
@@ -388,6 +388,110 @@ class TradePageRenderingTests(TestCase):
         self.assertContains(response, 'id="holdingsTable"')
         self.assertContains(response, 'id="positionsTable"')
         self.assertContains(response, 'id="openOrdersTable"')
+
+    @patch('app.views._auth_status', return_value='expired')
+    @patch('app.views._trade_data_for_user', side_effect=KiteException('temporary failure'))
+    def test_holdings_table_includes_t1_and_used_quantity_columns(self, _mock_trade_data, _mock_auth_status):
+        request = self.factory.get(reverse('trade') + '?api_key=' + self.kite_user.api_key)
+        request.user = self.user
+
+        response = trade(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<th>T1 Qty</th>', html=False)
+        self.assertContains(response, '<th>Used Qty</th>', html=False)
+
+
+class TradeDropdownScopingTests(TestCase):
+    """The trade dropdown lists Kite users irrespective of token status,
+    scoped by the logged-in user's role."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.owner = User.objects.create_user(username='scope-owner', password='pass')
+        self.owner.profile.role = Profile.SELF_ONLY
+        self.owner.profile.save()
+        self.trader = User.objects.create_user(username='scope-trader', password='pass')
+        self.trader.profile.role = Profile.TRADER_ALL
+        self.trader.profile.save()
+
+        # Own account WITHOUT a token (inactive) must still be listed.
+        self.owner_tokenless = KiteUser.objects.create(
+            owner=self.owner, api_key='own-tokenless-api', api_secret='s',
+            access_token='', user_name='Own Tokenless', user_id='OT0001',
+        )
+        # Another app user's account, also tokenless.
+        self.foreign_tokenless = KiteUser.objects.create(
+            owner=self.trader, api_key='foreign-tokenless-api', api_secret='s',
+            access_token='', user_name='Foreign Tokenless', user_id='FT0002',
+        )
+
+    def test_self_only_sees_only_own_users_regardless_of_token(self):
+        request = self.factory.get(reverse('trade'))
+        request.user = self.owner
+
+        response = trade(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Own Tokenless')
+        self.assertNotContains(response, 'Foreign Tokenless')
+
+    def test_trader_all_sees_all_users_regardless_of_token(self):
+        request = self.factory.get(reverse('trade'))
+        request.user = self.trader
+
+        response = trade(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Own Tokenless')
+        self.assertContains(response, 'Foreign Tokenless')
+
+    @patch('app.views._auth_status', return_value='none')
+    @patch('app.views._trade_data_for_user', return_value={'open_orders': [], 'positions': []})
+    def test_refresh_works_for_tokenless_selected_user(self, _mock_trade_data, _mock_status):
+        request = self.factory.get(reverse('trade_refresh_data'), {'api_key': 'own-tokenless-api'})
+        request.user = self.owner
+
+        response = trade_refresh_data(request)
+        payload = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload['api_key'], 'own-tokenless-api')
+        self.assertEqual(payload['selected_status']['label'], 'Needs Authentication')
+
+    def test_get_trade_user_finds_tokenless_account_scoped_by_role(self):
+        # self_only owner can resolve their own tokenless account...
+        self.assertEqual(
+            _get_trade_user('own-tokenless-api', self.owner),
+            self.owner_tokenless,
+        )
+        # ...but not another user's account.
+        self.assertIsNone(_get_trade_user('foreign-tokenless-api', self.owner))
+        # trader_all can resolve any tokenless account.
+        self.assertEqual(
+            _get_trade_user('foreign-tokenless-api', self.trader),
+            self.foreign_tokenless,
+        )
+
+
+class KiteCallbackUrlTests(TestCase):
+    """`_kite_callback_url` derives its scheme from DEBUG."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+
+    @override_settings(DEBUG=True)
+    def test_debug_true_uses_request_scheme_and_host(self):
+        request = self.factory.get('/configurezkauth/')
+        url = _kite_callback_url(request)
+        self.assertEqual(url, 'http://testserver' + reverse('kite_callback'))
+
+    @override_settings(DEBUG=False)
+    def test_debug_false_forces_https(self):
+        request = self.factory.get('/configurezkauth/')
+        url = _kite_callback_url(request)
+        self.assertEqual(url, 'https://testserver' + reverse('kite_callback'))
+
 
 
 class MarketProtectionTests(TestCase):

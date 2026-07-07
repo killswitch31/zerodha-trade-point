@@ -123,42 +123,47 @@ Method B (from Django admin):
 3. Select the superuser account.
 4. Click the password change link and save.
 
-### 6. Local settings note (important)
+### 6. Local vs production configuration
 
-For local HTTP development with `runserver`, update these values temporarily in file `zerodha_trade_point/settings.py`:
+Security-sensitive settings are driven automatically by the `DJANGO_DEBUG`
+environment variable, so you no longer need to hand-edit `settings.py` when
+switching between local development and production.
 
-- Generate a random UUID for local fallback secret key:
+- `DJANGO_DEBUG` unset (or anything other than `False`) &rarr; **debug mode** (local defaults).
+- `DJANGO_DEBUG=False` &rarr; **production mode** (secure defaults).
+
+What each mode applies in `zerodha_trade_point/settings.py`:
+
+| Setting | Local (`DEBUG=True`) | Production (`DEBUG=False`) |
+| --- | --- | --- |
+| `DEBUG` | `True` | `False` |
+| `SECRET_KEY` fallback | random `uuid.uuid4()` | `None` (must set `DJANGO_SECRET_KEY`) |
+| `SECURE_SSL_REDIRECT` | `False` | `True` |
+| `SESSION_COOKIE_SECURE` | `False` | `True` |
+| `CSRF_COOKIE_SECURE` | `False` | `True` |
+| Session backend | in-memory (cleared on restart) | database-backed |
+
+For **local HTTP development** with `runserver`, no changes are required — the
+default (`DJANGO_DEBUG` unset) already runs in debug mode with an auto-generated
+secret key and insecure cookies suitable for `http://127.0.0.1:8000/`.
+
+To force debug mode explicitly:
+
+macOS/Linux:
 
 ```bash
-python -c "import uuid; print(uuid.uuid4())"
+export DJANGO_DEBUG=True
 ```
 
-- In `zerodha_trade_point/settings.py` line 16, replace:
+Windows (PowerShell):
 
-```python
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default=None)
+```powershell
+$env:DJANGO_DEBUG = "True"
 ```
 
-with:
-
-```python
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default='<random_uuid>')
-```
-
-- Use the generated UUID value in place of `<random_uuid>`.
-
-- Set `DEBUG = True`
-- Set `SECURE_SSL_REDIRECT = False`
-- Set `SESSION_COOKIE_SECURE = False`
-- Set `CSRF_COOKIE_SECURE = False`
-
-For production, in file `zerodha_trade_point/settings.py`, revert to secure values:
-
-- Set `DEBUG = False`
-- Set `SECURE_SSL_REDIRECT = True`
-- Set `SESSION_COOKIE_SECURE = True`
-- Set `CSRF_COOKIE_SECURE = True`
-- Revert `SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default='<random_uuid>')` to `SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default=None)`
+For **production**, set `DJANGO_DEBUG=False` (see the Azure app settings step
+below) and provide a strong `DJANGO_SECRET_KEY`, since there is no insecure
+fallback when debug is off.
 
 ### 7. Start application
 
@@ -262,6 +267,7 @@ az webapp config appsettings set \
 	--name <YOUR_WEBAPP_NAME> \
 	--resource-group <YOUR_RESOURCE_GROUP> \
 	--settings \
+		DJANGO_DEBUG="False" \
 		DJANGO_ALLOWED_HOSTS="<YOUR_WEBAPP_NAME>.azurewebsites.net" \
 		DJANGO_CSRF_TRUSTED_ORIGINS="https://<YOUR_WEBAPP_NAME>.azurewebsites.net" \
 		DJANGO_SECRET_KEY="<YOUR_STRONG_SECRET_KEY>" \
@@ -271,6 +277,8 @@ az webapp config appsettings set \
 ```
 
 `SCM_DO_BUILD_DURING_DEPLOYMENT=true` ensures App Service runs build steps during deployment in production.
+
+`DJANGO_DEBUG=False` puts the app in production mode (secure cookies, SSL redirect, database-backed sessions, and no insecure secret-key fallback).
 
 The login page supports Cloudflare Turnstile. To enable strong CAPTCHA on `/login`, also set:
 

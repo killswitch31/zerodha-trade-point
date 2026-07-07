@@ -12,6 +12,7 @@ from django.utils.http import urlencode
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.models import User
+from django.conf import settings
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import KiteException, TokenException
 from app.forms import AddUserForm, ManageZkUserForm, EditAppUserForm, EditKiteCredentialsForm
@@ -194,6 +195,19 @@ def _kite_login_url(api_key):
     return url.replace('https://kite.trade/', 'https://kite.zerodha.com/')
 
 
+def _kite_callback_url(request):
+    """Returns the Zerodha OAuth callback URL.
+
+    In local development (DEBUG=True) the URL reflects the current request
+    (e.g. http://127.0.0.1:8000/kite/callback/). In production (DEBUG=False)
+    it is forced to https for the deployed host.
+    """
+    path = reverse('kite_callback')
+    if settings.DEBUG:
+        return request.build_absolute_uri(path)
+    return 'https://{host}{path}'.format(host=request.get_host(), path=path)
+
+
 @admin_required
 def managezkusers(request):
     """Admin-only: provision and manage app login users, and inspect all Kite accounts."""
@@ -341,7 +355,7 @@ def configurezkauth(request):
         'owners': _owner_choices() if is_admin(request.user) else [],
         'owner_filter': owner_filter,
         'rows': _user_rows(request.user, owner_filter),
-        'redirect_url': request.build_absolute_uri(reverse('kite_callback')),
+        'redirect_url': _kite_callback_url(request),
     }
 
     reauth_id = request.GET.get('reauth')
@@ -598,7 +612,7 @@ def _order_status_messages(orders):
 
 
 def _get_trade_user(api_key, request_user):
-    qs = KiteUser.objects.exclude(access_token='')
+    qs = KiteUser.objects.all()
     if not can_trade_all(request_user):
         qs = qs.filter(owner=request_user)
     return qs.filter(api_key=api_key).first()
@@ -684,7 +698,7 @@ def trade(request):
     """Shows trading data for a selected authenticated user."""
     assert isinstance(request, HttpRequest)
     trade_all = can_trade_all(request.user)
-    users = KiteUser.objects.exclude(access_token='').select_related('owner').order_by('user_name')
+    users = KiteUser.objects.select_related('owner').order_by('user_name')
     if not trade_all:
         users = users.filter(owner=request.user)
     selected = request.GET.get('api_key', '')

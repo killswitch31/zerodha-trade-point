@@ -66,27 +66,6 @@
     {% endif %}
 </div>
 
-<div id="chartWidgetControls" style="margin-top:15px; max-width:1200px;">
-    <button type="button" id="loadTradingViewWidget" class="btn btn-info">Load TradingView Chart</button>
-    <p class="text-muted" style="margin-top:8px; margin-bottom:0;">
-        Disclaimer: This chart supports only BSE listed securities. It does not support NSE listed securities. If an NSE listed security is searched from within the widget, open it in a new TradingView tab.
-    </p>
-</div>
-
-<div id="tradingViewWidgetPanel" class="panel panel-default" style="display:none; margin-top:12px; max-width:1200px; height:800px; flex-direction:column;">
-    <div class="panel-heading" style="display:flex; align-items:center; justify-content:space-between;">
-        <strong>TradingView Chart</strong>
-        <button type="button" class="btn btn-default btn-xs" id="closeTradingViewWidgetTop">Close</button>
-    </div>
-    <div class="panel-body" style="padding:10px 10px 10px 44px; position:relative; flex:1; min-height:0;">
-        <button type="button" class="btn btn-default btn-xs" id="closeTradingViewWidgetLeft" style="position:absolute; left:8px; top:50%; transform:translateY(-50%); z-index:5;">Close</button>
-        <div id="tradingViewWidgetMount" style="height:100%; width:100%;"></div>
-    </div>
-    <div class="panel-footer text-left">
-        <button type="button" class="btn btn-default btn-xs" id="closeTradingViewWidgetBottom">Close</button>
-    </div>
-</div>
-
 <h4>Place order</h4>
 <div id="placePanel" class="panel panel-default" style="max-width:420px;">
     <div class="panel-body">
@@ -253,20 +232,22 @@
 
 <h4>Holdings ({{ holdings|length }})</h4>
 <table id="holdingsTable" class="table table-condensed">
-    <thead><tr><th>Security</th><th>Exchange</th><th>Qty</th><th>Average price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
+    <thead><tr><th>Security</th><th>Exchange</th><th>Qty</th><th>T1 Qty</th><th>Used Qty</th><th>Average price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
     <tbody>
     {% for h in holdings %}
         <tr>
             <td>{{ h.tradingsymbol }}</td>
             <td>{{ h.exchange }}</td>
             <td>{{ h.quantity }}</td>
+            <td>{{ h.t1_quantity }}</td>
+            <td>{{ h.used_quantity }}</td>
             <td>{{ h.average_price }}</td>
             <td>{{ h.last_price }}</td>
             <td class="{% if h.pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ h.pnl }}</td>
         </tr>
-    {% empty %}<tr><td colspan="6">None</td></tr>{% endfor %}
+    {% empty %}<tr><td colspan="8">None</td></tr>{% endfor %}
     </tbody>
-    <tfoot><tr><th colspan="5" class="text-right">Total P&amp;L</th><th id="holdingsTotalPnl" class="{% if holdings_pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ holdings_pnl }}</th></tr></tfoot>
+    <tfoot><tr><th colspan="7" class="text-right">Total P&amp;L</th><th id="holdingsTotalPnl" class="{% if holdings_pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ holdings_pnl }}</th></tr></tfoot>
 </table>
 
 <h4>Positions ({{ positions|length }})</h4>
@@ -311,7 +292,7 @@
         var csrfToken = document.querySelector('[name=csrfmiddlewaretoken]') ? document.querySelector('[name=csrfmiddlewaretoken]').value : '';
         var refreshStatus = document.getElementById('refreshStatus');
         var refreshCountdown = document.getElementById('refreshCountdown');
-        var refreshIntervalSeconds = 60;
+        var refreshIntervalSeconds = 10;
         var refreshCountdownSeconds = refreshIntervalSeconds;
         var isRefreshing = false;
 
@@ -409,11 +390,7 @@
             setRefreshButtonState(true);
             updateRefreshStatus('Refreshing trade data...');
 
-            var tradeAll = refreshTradeButton.dataset.tradeAll === '1';
-            var params = new URLSearchParams({ api_key: tradeAll ? 'all' : apiKey });
-            if (tradeAll) {
-                params.set('selected_api_key', apiKey);
-            }
+            var params = new URLSearchParams({ api_key: apiKey });
             fetch(tradeUrl + '?' + params.toString())
                 .then(function (r) { return r.json(); })
                 .then(function (data) {
@@ -443,13 +420,15 @@
                             '<td>' + displayValue(h.tradingsymbol) + '</td>' +
                             '<td>' + displayValue(h.exchange) + '</td>' +
                             '<td>' + displayValue(h.quantity) + '</td>' +
+                            '<td>' + displayValue(h.t1_quantity) + '</td>' +
+                            '<td>' + displayValue(h.used_quantity) + '</td>' +
                             '<td>' + displayValue(h.average_price) + '</td>' +
                             '<td>' + displayValue(h.last_price) + '</td>' +
                             '<td class="' + ((h.pnl || 0) < 0 ? 'text-danger' : 'text-success') + '">' + displayValue(h.pnl) + '</td>' +
                             '</tr>';
                     }).join('');
                     var holdingsBody = document.querySelector('#holdingsTable tbody');
-                    if (holdingsBody) { holdingsBody.innerHTML = holdingsHtml || '<tr><td colspan="6">None</td></tr>'; }
+                    if (holdingsBody) { holdingsBody.innerHTML = holdingsHtml || '<tr><td colspan="8">None</td></tr>'; }
                     var holdingsPnl = document.querySelector('#holdingsTotalPnl');
                     if (holdingsPnl) { holdingsPnl.textContent = displayValue(data.holdings_pnl || 0); holdingsPnl.className = (data.holdings_pnl < 0 ? 'text-danger' : 'text-success'); }
 
@@ -564,7 +543,7 @@
         function startTradePolling() {
             refreshTradeData();
             resetCountdown();
-            setInterval(refreshTradeData, 60000);
+            setInterval(refreshTradeData, refreshIntervalSeconds * 1000);
             setInterval(tickCountdown, 1000);
         }
 
@@ -596,86 +575,6 @@
         var panel = document.getElementById('placePanel');
         var responseBottom = document.getElementById('placeResponseBottom');
         var responseClearTimer = null;
-        var chartButton = document.getElementById('loadTradingViewWidget');
-        var chartPanel = document.getElementById('tradingViewWidgetPanel');
-        var chartMount = document.getElementById('tradingViewWidgetMount');
-        var closeChartLeftBtn = document.getElementById('closeTradingViewWidgetLeft');
-        var closeChartTopBtn = document.getElementById('closeTradingViewWidgetTop');
-        var closeChartBottomBtn = document.getElementById('closeTradingViewWidgetBottom');
-
-        function clearTradingViewWidget() {
-            if (chartMount) {
-                chartMount.innerHTML = '';
-            }
-        }
-
-        function hideTradingViewWidget() {
-            clearTradingViewWidget();
-            if (chartPanel) {
-                chartPanel.style.display = 'none';
-            }
-        }
-
-        function buildTradingViewWidget(symbolCode) {
-            if (!chartMount) {
-                return;
-            }
-            clearTradingViewWidget();
-
-            var container = document.createElement('div');
-            container.className = 'tradingview-widget-container';
-            container.style.height = '100%';
-            container.style.width = '100%';
-
-            var widget = document.createElement('div');
-            widget.className = 'tradingview-widget-container__widget';
-            widget.style.height = 'calc(100% - 32px)';
-            widget.style.width = '100%';
-            container.appendChild(widget);
-
-            var copyright = document.createElement('div');
-            copyright.className = 'tradingview-widget-copyright';
-            copyright.innerHTML = '<a href="https://www.tradingview.com/symbols/BSE-SENSEX/" rel="noopener nofollow" target="_blank"><span class="blue-text">SENSEX chart</span></a><span class="trademark"> by TradingView</span>';
-            container.appendChild(copyright);
-
-            var script = document.createElement('script');
-            script.type = 'text/javascript';
-            script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-            script.async = true;
-            script.text = JSON.stringify({
-                allow_symbol_change: true,
-                calendar: false,
-                details: false,
-                hide_side_toolbar: true,
-                hide_top_toolbar: false,
-                hide_legend: false,
-                hide_volume: false,
-                hotlist: false,
-                interval: 'D',
-                locale: 'en',
-                save_image: true,
-                style: '1',
-                symbol: symbolCode,
-                theme: 'light',
-                timezone: 'Asia/Kolkata',
-                backgroundColor: '#ffffff',
-                gridColor: 'rgba(46, 46, 46, 0.06)',
-                watchlist: [],
-                withdateranges: true,
-                compareSymbols: [],
-                show_popup_button: true,
-                popup_height: '1000',
-                popup_width: '1200',
-                studies: [],
-                autosize: true
-            });
-            container.appendChild(script);
-
-            chartMount.appendChild(container);
-            if (chartPanel) {
-                chartPanel.style.display = 'flex';
-            }
-        }
 
         function showPlaceResponse(message, success) {
             var css = success ? 'alert-success' : 'alert-danger';
@@ -706,26 +605,6 @@
             if (responseBottom) {
                 responseBottom.innerHTML = '';
             }
-        }
-
-        if (chartButton) {
-            chartButton.addEventListener('click', function () {
-                buildTradingViewWidget('BSE:SENSEX');
-                if (chartPanel) {
-                    chartPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }
-            });
-        }
-
-        if (closeChartLeftBtn) {
-            closeChartLeftBtn.addEventListener('click', hideTradingViewWidget);
-        }
-
-        if (closeChartTopBtn) {
-            closeChartTopBtn.addEventListener('click', hideTradingViewWidget);
-        }
-        if (closeChartBottomBtn) {
-            closeChartBottomBtn.addEventListener('click', hideTradingViewWidget);
         }
 
         // BUY = green, SELL = red; recolor submit + panel.

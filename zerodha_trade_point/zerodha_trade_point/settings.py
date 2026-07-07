@@ -5,6 +5,7 @@ Configured for Django 6 compatibility.
 """
 
 import os
+import uuid
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -12,11 +13,15 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/stable/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default=None)
-
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+# Defaults to True; set the DJANGO_DEBUG environment variable to "False" to disable.
+DEBUG = os.environ.get("DJANGO_DEBUG", default="True").lower() != "false"
+
+# SECURITY WARNING: keep the secret key used in production secret!
+if DEBUG:
+    SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default=uuid.uuid4())
+else:
+    SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", default=None)
 
 def _csv_env_list(name, default=''):
     """Returns a trimmed list from a comma-separated env var."""
@@ -35,12 +40,28 @@ csrf_trusted_origins = set(_csv_env_list('DJANGO_CSRF_TRUSTED_ORIGINS', ''))
 if website_hostname:
     csrf_trusted_origins.add('https://{0}'.format(website_hostname))
 CSRF_TRUSTED_ORIGINS = sorted(csrf_trusted_origins)
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
-SECURE_SSL_REDIRECT = True
+if DEBUG:
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SECURE_SSL_REDIRECT = False
+else:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = True
 SECURE_HSTS_SECONDS = int(os.environ.get('DJANGO_SECURE_HSTS_SECONDS', '0'))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = os.environ.get('DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS', 'false').lower() == 'true'
 SECURE_HSTS_PRELOAD = os.environ.get('DJANGO_SECURE_HSTS_PRELOAD', 'false').lower() == 'true'
+
+# Session backend: in local development (DEBUG=True) store sessions in an
+# in-memory cache so login state is cleared on every dev server restart;
+# in production (DEBUG=False) use the default database-backed sessions.
+if DEBUG:
+    SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        },
+    }
 
 # Application references
 # https://docs.djangoproject.com/en/stable/ref/settings/#std:setting-INSTALLED_APPS

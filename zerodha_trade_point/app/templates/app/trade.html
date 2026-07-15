@@ -152,6 +152,51 @@
     </div>
 </div>
 
+<div id="convertModal" class="modal fade" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                <h4 class="modal-title">Convert position <span id="cp_label"></span></h4>
+            </div>
+            <div class="modal-body">
+                <form id="convertForm" method="post" action="{% url 'trade_convert_position' %}" class="form-horizontal">
+                    {% csrf_token %}
+                    <input type="hidden" name="api_key" value="{{ selected }}" />
+                    <input type="hidden" name="exchange" id="cp_exchange" />
+                    <input type="hidden" name="tradingsymbol" id="cp_symbol" />
+                    <input type="hidden" name="transaction_type" id="cp_side" />
+                    <input type="hidden" name="old_product" id="cp_old_product" />
+                    <div class="form-group">
+                        <label class="control-label">Security</label>
+                        <p class="form-control-static" id="cp_current_symbol"></p>
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label">Current product</label>
+                        <p class="form-control-static" id="cp_current_product"></p>
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label" for="cp_new_product">New product</label>
+                        <select name="new_product" id="cp_new_product" class="form-control"><option>CNC</option><option>MIS</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label" for="cp_position_type">Position type</label>
+                        <select name="position_type" id="cp_position_type" class="form-control"><option value="day">day</option><option value="overnight">overnight</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label" for="cp_qty">Quantity</label>
+                        <input name="quantity" id="cp_qty" type="number" min="1" class="form-control" />
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                <button type="submit" form="convertForm" class="btn btn-primary">Convert</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <h4 id="openOrdersHeading">Open orders ({{ open_orders|length }})</h4>
 <table id="openOrdersTable" class="table table-condensed">
     <thead><tr><th>Actions</th><th>Order ID</th><th>Security</th><th>Side</th><th>Qty</th><th>Filled</th><th>Pending</th><th>Time placed</th><th>Exchange</th><th>Price</th><th>Trigger price</th><th>Average price</th><th>Product</th><th>Order type</th></tr></thead>
@@ -252,10 +297,11 @@
 
 <h4>Positions ({{ positions|length }})</h4>
 <table id="positionsTable" class="table table-condensed">
-    <thead><tr><th>Security</th><th>Exchange</th><th>Product</th><th>Qty</th><th>Average price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
+    <thead><tr><th>Actions</th><th>Security</th><th>Exchange</th><th>Product</th><th>Qty</th><th>Average price</th><th>Last price</th><th>P&amp;L</th></tr></thead>
     <tbody>
     {% for p in positions %}
         <tr>
+            <td><button type="button" class="btn btn-primary btn-sm" onclick="convertPosition(this)" data-ex="{{ p.exchange }}" data-sym="{{ p.tradingsymbol }}" data-qty="{{ p.quantity }}" data-product="{{ p.product }}">Convert</button></td>
             <td>{{ p.tradingsymbol }}</td>
             <td>{{ p.exchange }}</td>
             <td>{{ p.product }}</td>
@@ -264,9 +310,9 @@
             <td>{{ p.last_price }}</td>
             <td class="{% if p.pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ p.pnl }}</td>
         </tr>
-    {% empty %}<tr><td colspan="7">None</td></tr>{% endfor %}
+    {% empty %}<tr><td colspan="8">None</td></tr>{% endfor %}
     </tbody>
-    <tfoot><tr><th colspan="6" class="text-right">Total P&amp;L</th><th id="positionsTotalPnl" class="{% if positions_pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ positions_pnl }}</th></tr></tfoot>
+    <tfoot><tr><th colspan="7" class="text-right">Total P&amp;L</th><th id="positionsTotalPnl" class="{% if positions_pnl < 0 %}text-danger{% else %}text-success{% endif %}">{{ positions_pnl }}</th></tr></tfoot>
 </table>
 {% endif %}
 
@@ -434,6 +480,7 @@
 
                     var positionsHtml = (data.positions || []).map(function (p) {
                         return '<tr>' +
+                            '<td><button type="button" class="btn btn-primary btn-sm" onclick="convertPosition(this)" data-ex="' + displayValue(p.exchange) + '" data-sym="' + displayValue(p.tradingsymbol) + '" data-qty="' + displayValue(p.quantity) + '" data-product="' + displayValue(p.product) + '">Convert</button></td>' +
                             '<td>' + displayValue(p.tradingsymbol) + '</td>' +
                             '<td>' + displayValue(p.exchange) + '</td>' +
                             '<td>' + displayValue(p.product) + '</td>' +
@@ -444,7 +491,7 @@
                             '</tr>';
                     }).join('');
                     var positionsBody = document.querySelector('#positionsTable tbody');
-                    if (positionsBody) { positionsBody.innerHTML = positionsHtml || '<tr><td colspan="7">None</td></tr>'; }
+                    if (positionsBody) { positionsBody.innerHTML = positionsHtml || '<tr><td colspan="8">None</td></tr>'; }
                     var positionsPnl = document.querySelector('#positionsTotalPnl');
                     if (positionsPnl) { positionsPnl.textContent = displayValue(data.positions_pnl || 0); positionsPnl.className = (data.positions_pnl < 0 ? 'text-danger' : 'text-success'); }
 
@@ -631,13 +678,15 @@
         function pick(it) {
             sym.value = it.symbol; ex.value = it.exchange; hideSuggest(); toggle();
         }
-        sym.addEventListener('input', function () {
+        function runSearch() {
             var q = sym.value.toUpperCase();
+            var selectedExchange = ex.value;
             suggest.innerHTML = '';
             if (!q) { hideSuggest(); return; }
             var n = 0;
             for (var i = 0; i < ALL.length && n < 30; i++) {
                 var it = ALL[i];
+                if (it.exchange !== selectedExchange) { continue; }
                 if (it.symbol.indexOf(q) !== -1 || (it.name || '').toUpperCase().indexOf(q) !== -1) {
                     var li = document.createElement('button');
                     li.type = 'button'; li.className = 'list-group-item';
@@ -647,6 +696,10 @@
                 }
             }
             suggest.style.display = n ? 'block' : 'none';
+        }
+        sym.addEventListener('input', runSearch);
+        ex.addEventListener('change', function () {
+            if (sym.value) { runSearch(); }
         });
         document.addEventListener('click', function (e) { if (e.target !== sym) { hideSuggest(); } });
 
@@ -689,6 +742,23 @@
             place.product.value = b.dataset.product; toggle();
             if (b.dataset.price) { price.value = b.dataset.price; }
             panel.scrollIntoView();
+        };
+
+        window.convertPosition = function (b) {
+            $('#convertModal').modal('show');
+            var rawQty = parseInt(b.dataset.qty, 10);
+            if (isNaN(rawQty)) { rawQty = 0; }
+            var currentProduct = (b.dataset.product || '').toUpperCase();
+            document.getElementById('cp_symbol').value = b.dataset.sym || '';
+            document.getElementById('cp_exchange').value = b.dataset.ex || '';
+            document.getElementById('cp_side').value = rawQty < 0 ? 'SELL' : 'BUY';
+            document.getElementById('cp_old_product').value = currentProduct;
+            document.getElementById('cp_current_symbol').textContent = b.dataset.sym || '';
+            document.getElementById('cp_current_product').textContent = currentProduct;
+            document.getElementById('cp_qty').value = Math.abs(rawQty);
+            document.getElementById('cp_label').textContent = b.dataset.sym || '';
+            // Default the target product to the opposite of the current one.
+            document.getElementById('cp_new_product').value = (currentProduct === 'MIS') ? 'CNC' : 'MIS';
         };
 
         place.addEventListener('submit', function (event) {

@@ -1007,3 +1007,58 @@ def trade_modify(request):
     except (KiteException, ValueError, KeyError) as ex:
         return _trade_redirect(api_key, 'error', 'Modify failed: {0}'.format(ex))
 
+
+def _normalize_product(product):
+    """Normalizes a margin product code.
+
+    NRML and CNC are equivalent for equity; per spec, use CNC in place of NRML.
+    """
+    product = (product or '').strip().upper()
+    if product == 'NRML':
+        return 'CNC'
+    return product
+
+
+@require_POST
+@login_required(login_url='login')
+def trade_convert_position(request):
+    """Converts an open position's margin product (for example CNC <-> MIS)."""
+    p = request.POST
+    api_key = p.get('api_key', '')
+    kite = _user_kite(api_key, request.user)
+    if not kite:
+        return _trade_redirect(api_key, 'error', 'No authenticated user selected.')
+    try:
+        quantity = int(p['quantity'])
+        if quantity <= 0:
+            raise ValueError('Quantity must be greater than zero.')
+        old_product = _normalize_product(p.get('old_product'))
+        new_product = _normalize_product(p.get('new_product'))
+        if not old_product or not new_product:
+            raise ValueError('Both current and target products are required.')
+        if old_product == new_product:
+            raise ValueError('Current and target products must differ.')
+        position_type = (p.get('position_type') or 'day').strip().lower()
+        if position_type not in ('day', 'overnight'):
+            raise ValueError('Position type must be "day" or "overnight".')
+        transaction_type = (p.get('transaction_type') or '').strip().upper()
+        if transaction_type not in ('BUY', 'SELL'):
+            raise ValueError('Transaction type must be BUY or SELL.')
+        tradingsymbol = (p.get('tradingsymbol') or '').strip()
+        exchange = (p.get('exchange') or '').strip()
+        if not tradingsymbol or not exchange:
+            raise ValueError('Exchange and tradingsymbol are required.')
+        kite.convert_position(
+            exchange=exchange,
+            tradingsymbol=tradingsymbol,
+            transaction_type=transaction_type,
+            position_type=position_type,
+            quantity=quantity,
+            old_product=old_product,
+            new_product=new_product,
+        )
+        return _trade_redirect(api_key, 'success', 'Position converted.')
+    except (KiteException, ValueError, KeyError) as ex:
+        return _trade_redirect(api_key, 'error', 'Convert failed: {0}'.format(ex))
+
+

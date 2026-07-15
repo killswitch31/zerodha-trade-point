@@ -18,6 +18,7 @@ urlpatterns = [
     path('trade/place/', views.trade_place, name='trade_place'),
     path('trade/modify/', views.trade_modify, name='trade_modify'),
     path('trade/cancel/', views.trade_cancel, name='trade_cancel'),
+    path('trade/convert/', views.trade_convert_position, name='trade_convert_position'),
     path('trade/instruments/', views.instruments_search, name='instruments_search'),
     path('trade/instruments-all/', views.instruments_all, name='instruments_all'),
     path('trade/quote/', views.quote, name='quote'),

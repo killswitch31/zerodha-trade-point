@@ -16,7 +16,7 @@ from app.forms import AddUserForm, BootstrapAuthenticationForm, ManageZkUserForm
 from app.models import KiteUser, Profile, generate_kite_user_identifier
 from app.context_processors import user_role
 from app.middleware import LoginRequiredMiddleware
-from app.views import token_statuses, configurezkauth, _kite_login_url, _kite_callback_url, trade, _place, trade_modify, _trade_data_for_user, is_admin, can_trade_all, can_configure_accounts, _persist_token_data, _renew_access_token, _call_with_token_renewal, _auth_status, managezkusers, kite_callback, _scalar_value, _sum_numeric_values, _calculate_margin_used, _normalize_position, trade_refresh_data, deletezkuser, _user_kite, instruments_search, instruments_all, quote, _INSTRUMENTS_CACHE, trade_place, trade_cancel, _validate_circuit, _user_rows, _sync_profile_from_kite, _owner_choices, _make_kite, _get_instruments, _get_trade_user
+from app.views import token_statuses, configurezkauth, _kite_login_url, _kite_callback_url, trade, _place, trade_modify, _trade_data_for_user, is_admin, can_trade_all, can_configure_accounts, _persist_token_data, _renew_access_token, _call_with_token_renewal, _auth_status, managezkusers, kite_callback, _scalar_value, _sum_numeric_values, _calculate_margin_used, _normalize_position, trade_refresh_data, deletezkuser, _user_kite, instruments_search, instruments_all, quote, _INSTRUMENTS_CACHE, trade_place, trade_cancel, _validate_circuit, _user_rows, _sync_profile_from_kite, _owner_choices, _make_kite, _get_instruments, _get_trade_user, trade_convert_position, _normalize_product, _empty_trade_data
 
 
 class AddUserFormTests(TestCase):
@@ -616,6 +616,207 @@ class TradeModifyComplianceTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIsNone(kite.modify_kwargs)
+
+
+class TradeConvertPositionTests(TestCase):
+    class _KiteConvertStub:
+        def __init__(self):
+            self.convert_kwargs = None
+
+        def convert_position(self, **kwargs):
+            self.convert_kwargs = kwargs
+            return True
+
+    class _KiteConvertFailStub:
+        def convert_position(self, **kwargs):
+            raise KiteException('conversion rejected')
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='convert-owner', password='convert-pass')
+
+    def _post(self, payload):
+        request = self.factory.post(reverse('trade_convert_position'), payload)
+        request.user = self.user
+        return request
+
+    def test_normalize_product_maps_nrml_to_cnc(self):
+        self.assertEqual(_normalize_product('NRML'), 'CNC')
+        self.assertEqual(_normalize_product('nrml'), 'CNC')
+        self.assertEqual(_normalize_product(' mis '), 'MIS')
+        self.assertEqual(_normalize_product(None), '')
+
+    @patch('app.views._user_kite')
+    def test_convert_position_success_passes_expected_kwargs(self, mock_user_kite):
+        kite = self._KiteConvertStub()
+        mock_user_kite.return_value = kite
+
+        response = trade_convert_position(self._post({
+            'api_key': 'k',
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY',
+            'position_type': 'day',
+            'quantity': '3',
+            'old_product': 'CNC',
+            'new_product': 'MIS',
+        }))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(kite.convert_kwargs, {
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY',
+            'position_type': 'day',
+            'quantity': 3,
+            'old_product': 'CNC',
+            'new_product': 'MIS',
+        })
+        self.assertIn('level=success', response['Location'])
+
+    @patch('app.views._user_kite')
+    def test_convert_position_normalizes_nrml_to_cnc(self, mock_user_kite):
+        kite = self._KiteConvertStub()
+        mock_user_kite.return_value = kite
+
+        response = trade_convert_position(self._post({
+            'api_key': 'k',
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'SELL',
+            'position_type': 'overnight',
+            'quantity': '5',
+            'old_product': 'MIS',
+            'new_product': 'NRML',
+        }))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(kite.convert_kwargs['old_product'], 'MIS')
+        self.assertEqual(kite.convert_kwargs['new_product'], 'CNC')
+        self.assertEqual(kite.convert_kwargs['position_type'], 'overnight')
+
+    @patch('app.views._user_kite', return_value=None)
+    def test_convert_position_without_authenticated_user_redirects_error(self, _mock_user_kite):
+        response = trade_convert_position(self._post({
+            'api_key': 'k',
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY',
+            'quantity': '1',
+            'old_product': 'CNC',
+            'new_product': 'MIS',
+        }))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('level=error', response['Location'])
+
+    @patch('app.views._user_kite')
+    def test_convert_position_rejects_non_positive_quantity(self, mock_user_kite):
+        kite = self._KiteConvertStub()
+        mock_user_kite.return_value = kite
+
+        response = trade_convert_position(self._post({
+            'api_key': 'k',
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY',
+            'quantity': '0',
+            'old_product': 'CNC',
+            'new_product': 'MIS',
+        }))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('level=error', response['Location'])
+        self.assertIsNone(kite.convert_kwargs)
+
+    @patch('app.views._user_kite')
+    def test_convert_position_rejects_same_products(self, mock_user_kite):
+        kite = self._KiteConvertStub()
+        mock_user_kite.return_value = kite
+
+        response = trade_convert_position(self._post({
+            'api_key': 'k',
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY',
+            'quantity': '2',
+            'old_product': 'NRML',
+            'new_product': 'CNC',
+        }))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('level=error', response['Location'])
+        self.assertIsNone(kite.convert_kwargs)
+
+    @patch('app.views._user_kite')
+    def test_convert_position_rejects_invalid_transaction_type(self, mock_user_kite):
+        kite = self._KiteConvertStub()
+        mock_user_kite.return_value = kite
+
+        response = trade_convert_position(self._post({
+            'api_key': 'k',
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'HOLD',
+            'quantity': '2',
+            'old_product': 'CNC',
+            'new_product': 'MIS',
+        }))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('level=error', response['Location'])
+        self.assertIsNone(kite.convert_kwargs)
+
+    @patch('app.views._user_kite')
+    def test_convert_position_handles_kite_exception(self, mock_user_kite):
+        mock_user_kite.return_value = self._KiteConvertFailStub()
+
+        response = trade_convert_position(self._post({
+            'api_key': 'k',
+            'exchange': 'NSE',
+            'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY',
+            'quantity': '2',
+            'old_product': 'CNC',
+            'new_product': 'MIS',
+        }))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('level=error', response['Location'])
+
+
+class TradePositionsConvertRenderingTests(TestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='pos-owner', password='pos-pass')
+        self.kite_user = KiteUser.objects.create(
+            owner=self.user,
+            api_key='pos-api',
+            api_secret='pos-secret',
+            access_token='pos-token',
+            user_name='Pos Kite',
+            user_id='PS1234',
+        )
+
+    @patch('app.views._auth_status', return_value='active')
+    @patch('app.views._trade_data_for_user')
+    def test_positions_row_renders_convert_button(self, mock_trade_data, _mock_status):
+        data = _empty_trade_data()
+        data['positions'] = [{
+            'tradingsymbol': 'INFY', 'exchange': 'NSE', 'product': 'MIS',
+            'quantity': 3, 'average_price': 100, 'last_price': 101, 'pnl': 3,
+        }]
+        mock_trade_data.return_value = data
+
+        request = self.factory.get(reverse('trade') + '?api_key=' + self.kite_user.api_key)
+        request.user = self.user
+
+        response = trade(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'onclick="convertPosition(this)"', html=False)
+        self.assertContains(response, 'id="convertModal"', html=False)
+        self.assertContains(response, 'data-sym="INFY"', html=False)
 
 
 class TradeDataResilienceTests(TestCase):

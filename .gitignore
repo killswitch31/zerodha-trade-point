@@ -21,8 +21,18 @@ local_settings.py
 media/
 staticfiles/
 
-# SQLite local DB
+# SQLite / local database files
+*.sqlite
 *.sqlite3
+*.db
+*.db3
+# SQLite sidecar files (journal / write-ahead log / shared-memory)
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*-journal
+*-wal
+*-shm
 
 # Environment and secrets
 .env

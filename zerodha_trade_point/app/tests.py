@@ -6,6 +6,7 @@ from django.contrib import admin
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.cache import cache
+from django.db import IntegrityError, transaction
 from django.test import TestCase, RequestFactory, override_settings
 from django.urls import reverse
 from requests import RequestException
@@ -934,7 +935,7 @@ class PermissionAndTokenHelperTests(TestCase):
 
     def test_renew_access_token_returns_false_without_required_credentials(self):
         missing_refresh = KiteUser.objects.create(owner=self.self_user, api_key='no-refresh', api_secret='secret', refresh_token='')
-        missing_secret = KiteUser.objects.create(owner=self.self_user, api_key='no-secret', api_secret='', refresh_token='refresh')
+        missing_secret = KiteUser.objects.create(owner=None, api_key='no-secret', api_secret='', refresh_token='refresh')
 
         self.assertFalse(_renew_access_token(missing_refresh))
         self.assertFalse(_renew_access_token(missing_secret))
@@ -992,7 +993,7 @@ class PermissionAndTokenHelperTests(TestCase):
 
     def test_auth_status_variants(self):
         kite_user = KiteUser.objects.create(owner=self.self_user, api_key='auth-api', access_token='token')
-        no_token_user = KiteUser.objects.create(owner=self.self_user, api_key='auth-none', access_token='')
+        no_token_user = KiteUser.objects.create(owner=None, api_key='auth-none', access_token='')
 
         self.assertEqual(_auth_status(no_token_user), 'none')
         with patch('app.views._call_with_token_renewal', return_value={'user_id': 'AB12'}):
@@ -1946,3 +1947,81 @@ class LoginAndTradeIntegrationTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIn('msg=Order+placed+%28ID+ORDER-123%29.', response['Location'])
+
+
+class OneToOneOwnerTests(TestCase):
+    """Each app login user may own at most one Kite account."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='oto-owner', password='oto-pass')
+
+    def test_model_rejects_second_account_for_same_owner(self):
+        KiteUser.objects.create(owner=self.user, api_key='oto-first', api_secret='s')
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                KiteUser.objects.create(owner=self.user, api_key='oto-second', api_secret='s')
+
+    def test_unowned_accounts_are_not_constrained(self):
+        KiteUser.objects.create(owner=None, api_key='oto-free-1', api_secret='s')
+        KiteUser.objects.create(owner=None, api_key='oto-free-2', api_secret='s')
+        self.assertEqual(KiteUser.objects.filter(owner__isnull=True).count(), 2)
+
+    @patch('app.views._auth_status', return_value='active')
+    def test_add_second_account_is_rejected_for_existing_owner(self, _mock_status):
+        KiteUser.objects.create(owner=self.user, api_key='oto-existing', api_secret='s')
+        request = self.factory.post(reverse('configurezkauth'), {
+            'zerodha_username': 'AB1234',
+            'api_key': 'oto-new-key',
+            'api_secret': 'new-secret',
+        })
+        request.user = self.user
+        request.session = {}
+
+        response = configurezkauth(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'You already have a Zerodha account configured.')
+        self.assertFalse(KiteUser.objects.filter(api_key='oto-new-key').exists())
+
+    @patch('app.views._kite_login_url', return_value='https://example.com/kite-login')
+    @patch('app.views._auth_status', return_value='active')
+    def test_resubmitting_same_api_key_updates_and_proceeds(self, _mock_status, _mock_login_url):
+        KiteUser.objects.create(owner=self.user, api_key='oto-same', api_secret='old-secret')
+        request = self.factory.post(reverse('configurezkauth'), {
+            'zerodha_username': 'AB1234',
+            'api_key': 'oto-same',
+            'api_secret': 'updated-secret',
+        })
+        request.user = self.user
+        request.session = {}
+
+        response = configurezkauth(request)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], 'https://example.com/kite-login')
+        self.assertEqual(KiteUser.objects.filter(owner=self.user).count(), 1)
+        self.assertEqual(KiteUser.objects.get(api_key='oto-same').api_secret, 'updated-secret')
+
+    @patch('app.views._kite_login_url', return_value='https://example.com/kite-login')
+    @patch('app.views._auth_status', return_value='active')
+    def test_first_account_can_be_added_for_owner_without_account(self, _mock_status, _mock_login_url):
+        request = self.factory.post(reverse('configurezkauth'), {
+            'zerodha_username': 'AB1234',
+            'api_key': 'oto-fresh',
+            'api_secret': 'fresh-secret',
+        })
+        request.user = self.user
+        request.session = {}
+
+        response = configurezkauth(request)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], 'https://example.com/kite-login')
+        self.assertEqual(KiteUser.objects.filter(owner=self.user).count(), 1)
+
+    def test_reverse_accessor_returns_single_account(self):
+        account = KiteUser.objects.create(owner=self.user, api_key='oto-rev', api_secret='s')
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.kite_user, account)
+

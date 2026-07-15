@@ -37,19 +37,18 @@ def ensure_profile(sender, instance, created, **kwargs):
         Profile.objects.get_or_create(user=instance, defaults={'role': Profile.SELF_ONLY})
 
 class KiteUser(models.Model):
-    """A Zerodha Kite Connect user whose API credentials are persisted."""
-    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='kite_users', null=True)
+    """A Zerodha Kite Connect user whose API credentials are persisted.
+
+    Each app login user owns at most one Kite account (one-to-one).
+    """
+    owner = models.OneToOneField(User, on_delete=models.CASCADE, related_name='kite_user', null=True, blank=True)
     zk_user_id = models.CharField(max_length=24, unique=True, default=generate_kite_user_identifier)
     api_key = models.CharField(max_length=64, unique=True, null=True, blank=True)
     api_secret = models.CharField(max_length=128, blank=True, default='')
     access_token = models.CharField(max_length=128, blank=True, default='')
     refresh_token = models.CharField(max_length=128, blank=True, default='')
-    manual_token = models.BooleanField(default=False)
     user_id = models.CharField(max_length=32, blank=True, default='')
     user_name = models.CharField(max_length=128, blank=True, default='')
-    zerodha_password = models.CharField(max_length=128, blank=True, default='')
-    zerodha_totp_key = models.CharField(max_length=64, blank=True, default='')
-    automate = models.PositiveSmallIntegerField(default=0)
     email = models.EmailField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

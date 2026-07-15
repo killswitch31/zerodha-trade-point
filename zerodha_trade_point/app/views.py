@@ -228,8 +228,8 @@ def managezkusers(request):
                     message_type = 'danger'
                 else:
                     username = user.username
-                    # Delete all KiteUser records for this user first
-                    user.kite_users.all().delete()
+                    # Delete the user's Kite account first (one-to-one).
+                    KiteUser.objects.filter(owner=user).delete()
                     user.delete()
                     message = f'User "{username}" deleted successfully.'
                     message_type = 'success'
@@ -339,8 +339,8 @@ def token_statuses(request):
 
 
 def _owner_choices():
-    """App login users owning at least one Kite account (admin owner dropdowns)."""
-    return User.objects.filter(kite_users__isnull=False).distinct().order_by('username')
+    """App login users who own a Kite account (admin owner dropdowns)."""
+    return User.objects.filter(kite_user__isnull=False).order_by('username')
 
 
 @account_config_required
@@ -430,11 +430,18 @@ def configurezkauth(request):
                 context['message'] = 'This API key is already configured for another app user.'
                 context['form'] = form
                 return render(request, 'app/adduser.html', context)
+            # Enforce one Kite account per app login user (one-to-one).
+            owned = KiteUser.objects.filter(owner=request.user).first()
+            if owned and owned.api_key != cleaned['api_key']:
+                context['success'] = False
+                context['result'] = True
+                context['message'] = 'You already have a Zerodha account configured. Remove it before adding another.'
+                context['form'] = form
+                return render(request, 'app/adduser.html', context)
             user, _created = KiteUser.objects.update_or_create(
                 api_key=cleaned['api_key'],
                 defaults={
                     'api_secret': cleaned['api_secret'],
-                    'manual_token': False,
                     # user_name is bootstrapped from the form and later overwritten from /user/profile.
                     'user_name': cleaned['zerodha_username'],
                     # user_id is populated/overwritten by /user/profile after auth callback.

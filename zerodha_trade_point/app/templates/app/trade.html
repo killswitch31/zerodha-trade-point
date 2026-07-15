@@ -4,7 +4,8 @@
 
 <h2>{{ title }}</h2>
 
-<form action="" method="get" class="form-inline">
+<form action="" method="post" class="form-inline">
+    {% csrf_token %}
     <select name="api_key" class="form-control" onchange="this.form.submit()">
         <option value="">-- Select Zerodha user --</option>
         {% for u in users %}
@@ -436,8 +437,7 @@
             setRefreshButtonState(true);
             updateRefreshStatus('Refreshing trade data...');
 
-            var params = new URLSearchParams({ api_key: apiKey });
-            fetch(tradeUrl + '?' + params.toString())
+            fetch(tradeUrl, { headers: { 'X-Api-Key': apiKey } })
                 .then(function (r) { return r.json(); })
                 .then(function (data) {
                     if (data.error) {
@@ -670,7 +670,7 @@
 
         // Preload all NSE+BSE securities once, then search instantly in-browser.
         var ALL = [];
-        fetch('/trade/instruments-all/?api_key=' + apiKey)
+        fetch('/trade/instruments-all/', { headers: { 'X-Api-Key': apiKey } })
             .then(function (r) { return r.json(); })
             .then(function (d) { ALL = d.results || []; });
 
@@ -707,7 +707,7 @@
         function toggle() {
             if (type.value === 'LIMIT') {
                 price.disabled = false;
-                fetch('/trade/quote/?api_key=' + apiKey + '&exchange=' + ex.value + '&symbol=' + encodeURIComponent(sym.value))
+                fetch('/trade/quote/?exchange=' + ex.value + '&symbol=' + encodeURIComponent(sym.value), { headers: { 'X-Api-Key': apiKey } })
                     .then(function (r) { return r.json(); })
                     .then(function (d) {
                         if (d.ok && d.lower != null) {

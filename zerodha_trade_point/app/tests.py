@@ -17,7 +17,7 @@ from app.forms import AddUserForm, BootstrapAuthenticationForm, ManageZkUserForm
 from app.models import KiteUser, Profile, generate_kite_user_identifier
 from app.context_processors import user_role
 from app.middleware import LoginRequiredMiddleware
-from app.views import token_statuses, configurezkauth, _kite_login_url, _kite_callback_url, trade, _place, trade_modify, _trade_data_for_user, is_admin, can_trade_all, can_configure_accounts, _persist_token_data, _renew_access_token, _call_with_token_renewal, _auth_status, managezkusers, kite_callback, _scalar_value, _sum_numeric_values, _calculate_margin_used, _normalize_position, trade_refresh_data, deletezkuser, _user_kite, instruments_search, instruments_all, quote, _INSTRUMENTS_CACHE, trade_place, trade_cancel, _validate_circuit, _user_rows, _sync_profile_from_kite, _owner_choices, _make_kite, _get_instruments, _get_trade_user, trade_convert_position, _normalize_product, _empty_trade_data
+from app.views import token_statuses, configurezkauth, _kite_login_url, _kite_callback_url, trade, _place, trade_modify, _trade_data_for_user, is_admin, can_trade_all, can_configure_accounts, _persist_token_data, _renew_access_token, _call_with_token_renewal, _auth_status, managezkusers, kite_callback, _scalar_value, _sum_numeric_values, _calculate_margin_used, _normalize_position, trade_refresh_data, deletezkuser, _user_kite, instruments_search, instruments_all, quote, _INSTRUMENTS_CACHE, trade_place, trade_cancel, _validate_circuit, _user_rows, _sync_profile_from_kite, _owner_choices, _make_kite, _get_instruments, _get_trade_user, trade_convert_position, _normalize_product, _empty_trade_data, _request_api_key
 
 
 class AddUserFormTests(TestCase):
@@ -337,7 +337,8 @@ class ConfigureZkAuthEditApiCredentialsTests(TestCase):
             'api_key': 'hijack',
             'api_secret': 'hijack-secret',
         })
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'not allowed')
         self.kite_user.refresh_from_db()
         self.assertEqual(self.kite_user.api_key, 'owner-api')
 
@@ -1366,20 +1367,22 @@ class AdditionalConfigureAndCallbackTests(TestCase):
         self.kite_user = KiteUser.objects.create(owner=self.user, api_key='extra-api', api_secret='extra-secret', access_token='tok')
         self.other_kite_user = KiteUser.objects.create(owner=self.other, api_key='other-extra-api', api_secret='other-secret', access_token='tok2')
 
-    @patch('app.views._auth_status', return_value='active')
-    def test_configurezkauth_duplicate_api_key_for_non_admin_is_rejected(self, _mock_status):
+    def test_configurezkauth_add_user_rejects_api_key_used_by_another(self):
+        fresh = User.objects.create_user(username='extra-fresh', password='fresh-pass')
         request = self.factory.post(reverse('configurezkauth'), {
-            'zerodha_username': 'AB1234',
+            'action': 'add_user',
             'api_key': 'other-extra-api',
             'api_secret': 'new-secret',
         })
-        request.user = self.user
+        request.user = fresh
         request.session = {}
 
         response = configurezkauth(request)
+        payload = json.loads(response.content)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'This API key is already configured for another app user.')
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(payload['ok'])
+        self.assertIn('already configured', payload['error'])
 
     @patch('app.views._auth_status', return_value='active')
     def test_configurezkauth_invalid_edit_request_shows_error(self, _mock_status):
@@ -1430,7 +1433,8 @@ class AdditionalConfigureAndCallbackTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response['Location'], reverse('configurezkauth'))
 
-    def test_kite_callback_covers_error_messages(self):
+    @patch('app.views._auth_status', return_value='active')
+    def test_kite_callback_covers_error_messages(self, _mock_status):
         request = self.factory.get(reverse('kite_callback'), {'status': 'cancelled'})
         request.user = self.user
         request.session = {}
@@ -1967,11 +1971,10 @@ class OneToOneOwnerTests(TestCase):
         KiteUser.objects.create(owner=None, api_key='oto-free-2', api_secret='s')
         self.assertEqual(KiteUser.objects.filter(owner__isnull=True).count(), 2)
 
-    @patch('app.views._auth_status', return_value='active')
-    def test_add_second_account_is_rejected_for_existing_owner(self, _mock_status):
+    def test_add_second_account_is_rejected_for_existing_owner(self):
         KiteUser.objects.create(owner=self.user, api_key='oto-existing', api_secret='s')
         request = self.factory.post(reverse('configurezkauth'), {
-            'zerodha_username': 'AB1234',
+            'action': 'add_user',
             'api_key': 'oto-new-key',
             'api_secret': 'new-secret',
         })
@@ -1979,20 +1982,38 @@ class OneToOneOwnerTests(TestCase):
         request.session = {}
 
         response = configurezkauth(request)
+        payload = json.loads(response.content)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'You already have a Zerodha account configured.')
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(payload['ok'])
+        self.assertIn('already configured', payload['error'])
         self.assertFalse(KiteUser.objects.filter(api_key='oto-new-key').exists())
 
-    @patch('app.views._kite_login_url', return_value='https://example.com/kite-login')
-    @patch('app.views._auth_status', return_value='active')
-    def test_resubmitting_same_api_key_updates_and_proceeds(self, _mock_status, _mock_login_url):
-        KiteUser.objects.create(owner=self.user, api_key='oto-same', api_secret='old-secret')
+    @patch('app.views._auth_status', return_value='none')
+    def test_add_user_ajax_creates_account_and_returns_card(self, _mock_status):
         request = self.factory.post(reverse('configurezkauth'), {
-            'zerodha_username': 'AB1234',
-            'api_key': 'oto-same',
-            'api_secret': 'updated-secret',
+            'action': 'add_user',
+            'user_id': 'NEW1',
+            'api_key': 'oto-add',
+            'api_secret': 'add-secret',
         })
+        request.user = self.user
+        request.session = {}
+
+        response = configurezkauth(request)
+        payload = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload['ok'])
+        self.assertIn('accountCard', payload['card_html'])
+        account = KiteUser.objects.get(owner=self.user)
+        self.assertEqual(account.api_key, 'oto-add')
+        self.assertEqual(account.user_id, 'NEW1')
+
+    @patch('app.views._kite_login_url', return_value='https://example.com/kite-login')
+    def test_authenticate_with_existing_account_redirects_to_oauth(self, _mock_login_url):
+        account = KiteUser.objects.create(owner=self.user, api_key='oto-same', api_secret='old-secret')
+        request = self.factory.post(reverse('configurezkauth'), {'action': 'authenticate'})
         request.user = self.user
         request.session = {}
 
@@ -2001,13 +2022,13 @@ class OneToOneOwnerTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response['Location'], 'https://example.com/kite-login')
         self.assertEqual(KiteUser.objects.filter(owner=self.user).count(), 1)
-        self.assertEqual(KiteUser.objects.get(api_key='oto-same').api_secret, 'updated-secret')
+        self.assertEqual(request.session.get('pending_zk_user_id'), account.zk_user_id)
 
     @patch('app.views._kite_login_url', return_value='https://example.com/kite-login')
-    @patch('app.views._auth_status', return_value='active')
-    def test_first_account_can_be_added_for_owner_without_account(self, _mock_status, _mock_login_url):
+    def test_first_account_created_and_authenticated_for_owner_without_account(self, _mock_login_url):
         request = self.factory.post(reverse('configurezkauth'), {
-            'zerodha_username': 'AB1234',
+            'action': 'authenticate',
+            'user_id': 'OPT1',
             'api_key': 'oto-fresh',
             'api_secret': 'fresh-secret',
         })
@@ -2019,9 +2040,122 @@ class OneToOneOwnerTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response['Location'], 'https://example.com/kite-login')
         self.assertEqual(KiteUser.objects.filter(owner=self.user).count(), 1)
+        account = KiteUser.objects.get(owner=self.user)
+        self.assertEqual(account.api_key, 'oto-fresh')
+        self.assertEqual(account.user_id, 'OPT1')
 
     def test_reverse_accessor_returns_single_account(self):
         account = KiteUser.objects.create(owner=self.user, api_key='oto-rev', api_secret='s')
         self.user.refresh_from_db()
         self.assertEqual(self.user.kite_user, account)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class ApiKeyTransportTests(TestCase):
+    """The web-app api_key must travel via header or POST body, not the URL query."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='transport-user', password='transport-pass')
+        self.kite_user = KiteUser.objects.create(
+            owner=self.user, api_key='hdr-api', api_secret='s',
+            access_token='tok', user_name='Hdr User', user_id='H1',
+        )
+
+    def test_request_api_key_precedence_and_fallback(self):
+        header_req = self.factory.get('/x', {'api_key': 'from-query'}, headers={'x-api-key': 'from-header'})
+        self.assertEqual(_request_api_key(header_req), 'from-header')
+
+        body_req = self.factory.post('/x', {'api_key': 'from-body'})
+        self.assertEqual(_request_api_key(body_req), 'from-body')
+
+        query_req = self.factory.get('/x', {'api_key': 'from-query'})
+        self.assertEqual(_request_api_key(query_req), 'from-query')
+
+        empty_req = self.factory.get('/x')
+        self.assertEqual(_request_api_key(empty_req), '')
+
+    @patch('app.views._auth_status', return_value='active')
+    @patch('app.views._trade_data_for_user')
+    def test_trade_selects_account_from_post_body(self, mock_trade_data, _mock_status):
+        mock_trade_data.return_value = _empty_trade_data()
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse('trade'), {'api_key': 'hdr-api'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['selected'], 'hdr-api')
+        self.assertEqual(response.context['selected_user'], self.kite_user)
+
+    @patch('app.views._auth_status', return_value='active')
+    @patch('app.views._trade_data_for_user')
+    def test_trade_selects_account_from_header(self, mock_trade_data, _mock_status):
+        mock_trade_data.return_value = _empty_trade_data()
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('trade'), headers={'x-api-key': 'hdr-api'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['selected'], 'hdr-api')
+
+    @patch('app.views._auth_status', return_value='active')
+    @patch('app.views._trade_data_for_user')
+    def test_trade_header_takes_precedence_over_query(self, mock_trade_data, _mock_status):
+        mock_trade_data.return_value = _empty_trade_data()
+        self.client.force_login(self.user)
+
+        response = self.client.get(
+            reverse('trade') + '?api_key=wrong-api',
+            headers={'x-api-key': 'hdr-api'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['selected'], 'hdr-api')
+
+    @patch('app.views._auth_status', return_value='active')
+    @patch('app.views._trade_data_for_user')
+    def test_trade_refresh_reads_api_key_from_header(self, mock_trade_data, _mock_status):
+        mock_trade_data.return_value = _empty_trade_data()
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('trade_refresh_data'), headers={'x-api-key': 'hdr-api'})
+        payload = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload['api_key'], 'hdr-api')
+
+    @patch('app.views._user_kite')
+    def test_quote_reads_api_key_from_header(self, mock_user_kite):
+        class _QuoteStub:
+            def quote(self, key):
+                return {key: {'last_price': 101, 'circuit_limit': {'lower': 90, 'upper': 110}}}
+
+        mock_user_kite.return_value = _QuoteStub()
+        self.client.force_login(self.user)
+
+        response = self.client.get(
+            reverse('quote'),
+            {'exchange': 'NSE', 'symbol': 'INFY'},
+            headers={'x-api-key': 'hdr-api'},
+        )
+        payload = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload['ok'])
+        self.assertEqual(mock_user_kite.call_args[0][0], 'hdr-api')
+
+    @patch('app.views._user_kite')
+    def test_instruments_all_reads_api_key_from_header(self, mock_user_kite):
+        class _InstrStub:
+            def instruments(self, exchange):
+                return [{'tradingsymbol': 'INFY', 'name': 'Infosys'}]
+
+        mock_user_kite.return_value = _InstrStub()
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('instruments_all'), headers={'x-api-key': 'hdr-api'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_user_kite.call_args[0][0], 'hdr-api')
+
 

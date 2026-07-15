@@ -139,6 +139,34 @@ class AddUserForm(forms.Form):
         return cleaned
 
 
+class ConfigureKiteForm(forms.Form):
+    """Collects credentials to configure a single Zerodha Kite account.
+
+    Zerodha user_id is optional and is overwritten from the /user/profile
+    response after OAuth; api_key and api_secret are required.
+    """
+    user_id = forms.CharField(required=False, max_length=32,
+                              widget=forms.TextInput({
+                                  'class': 'form-control',
+                                  'placeholder': 'Zerodha User ID (optional)'}))
+    api_key = forms.CharField(max_length=64,
+                              widget=forms.TextInput({
+                                  'class': 'form-control',
+                                  'placeholder': 'API Key'}))
+    api_secret = forms.CharField(max_length=128,
+                                 widget=forms.PasswordInput({
+                                     'class': 'form-control',
+                                     'placeholder': 'API Secret'}))
+
+    def clean(self):
+        cleaned = super().clean()
+        if not cleaned.get('api_key'):
+            self.add_error('api_key', 'API key is required.')
+        if not cleaned.get('api_secret'):
+            self.add_error('api_secret', 'API secret is required.')
+        return cleaned
+
+
 class ManageZkUserForm(forms.Form):
     """Admin-only: provision a new Django login user with a role."""
     username = forms.CharField(max_length=150,

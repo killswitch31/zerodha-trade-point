@@ -9,13 +9,14 @@ from django.http import HttpRequest, JsonResponse
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import urlencode
+from django.template.loader import render_to_string
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.models import User
 from django.conf import settings
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import KiteException, TokenException
-from app.forms import AddUserForm, ManageZkUserForm, EditAppUserForm, EditKiteCredentialsForm
+from app.forms import AddUserForm, ConfigureKiteForm, ManageZkUserForm, EditAppUserForm, EditKiteCredentialsForm
 from app.models import KiteUser, Profile
 
 # Per-process cache of instruments per exchange: {exchange: (timestamp, list)}.
@@ -343,25 +344,90 @@ def _owner_choices():
     return User.objects.filter(kite_user__isnull=False).order_by('username')
 
 
-@account_config_required
-def configurezkauth(request):
-    """Lists configured Zerodha users; adds and re-authenticates via OAuth."""
-    assert isinstance(request, HttpRequest)
-    owner_filter = request.GET.get('owner', '') if is_admin(request.user) else ''
-    context = {
-        'title': 'Configure ZK Auth',
-        'year': datetime.now().year,
-        'is_admin': is_admin(request.user),
-        'owners': _owner_choices() if is_admin(request.user) else [],
-        'owner_filter': owner_filter,
-        'rows': _user_rows(request.user, owner_filter),
-        'redirect_url': _kite_callback_url(request),
+def _account_payload(account):
+    """JSON-serializable snapshot of a Kite account for the configure card.
+
+    Includes the live access-token status (probed via the Zerodha API).
+    """
+    status = _auth_status(account)
+    presentation = _status_presentation(status)
+    owner = account.owner
+    return {
+        'zk_user_id': account.zk_user_id,
+        'app_username': owner.username if owner else '',
+        'app_user_id': owner.id if owner else None,
+        'user_name': account.user_name or '',
+        'user_id': account.user_id or '',
+        'email': account.email or '',
+        'api_key': account.api_key or '',
+        'api_secret': account.api_secret or '',
+        'status': status,
+        'status_label': presentation['label'],
+        'status_css': presentation['css'],
     }
 
+
+def _first_form_error(form):
+    """Returns a single human-readable error string from a bound form."""
+    for errors in form.errors.values():
+        if errors:
+            return errors[0]
+    return 'Please correct the highlighted fields.'
+
+
+def _configure_context(request, admin, own_account, message=None, message_type=None):
+    """Builds the shared render context for the configure page."""
+    owner_filter = request.GET.get('owner', '') if admin else ''
+    return {
+        'title': 'Configure ZK Auth',
+        'year': datetime.now().year,
+        'is_admin': admin,
+        'owners': _owner_choices() if admin else [],
+        'owner_filter': owner_filter,
+        'rows': _user_rows(request.user, owner_filter) if admin else [],
+        'redirect_url': _kite_callback_url(request),
+        'own_account': own_account,
+        'own_account_data': _account_payload(own_account) if own_account else None,
+        'form': ConfigureKiteForm(),
+        'page_message': message,
+        'page_message_type': message_type,
+    }
+
+
+def _configure_create_account(request, cleaned):
+    """Creates a credentials-only Kite account for the logged-in user.
+
+    Returns (account, error_message). Enforces one account per app user and
+    globally unique api_key (so no two users can share an API key).
+    """
+    api_key = cleaned['api_key']
+    if KiteUser.objects.filter(api_key=api_key).exists():
+        return None, 'This API key is already configured.'
+    account = KiteUser.objects.create(
+        owner=request.user,
+        api_key=api_key,
+        api_secret=cleaned['api_secret'],
+        user_id=cleaned.get('user_id') or '',
+    )
+    return account, None
+
+
+@account_config_required
+def configurezkauth(request):
+    """Configure the logged-in user's single Zerodha Kite account.
+
+    Shows a details card when an account exists, otherwise an add form. Admins
+    also see the all-accounts management table.
+    """
+    assert isinstance(request, HttpRequest)
+    admin = is_admin(request.user)
+    own_account = KiteUser.objects.filter(owner=request.user).first()
+
+    # GET ?reauth=<zk_user_id>: jump straight into OAuth for an existing account.
     reauth_id = request.GET.get('reauth')
     if reauth_id:
         user = get_object_or_404(KiteUser, zk_user_id=reauth_id)
-        if not is_admin(request.user) and user.owner_id != request.user.id:
+        if not admin and user.owner_id != request.user.id:
             return redirect('configurezkauth')
         if not user.api_key or not user.api_secret:
             return redirect('configurezkauth')
@@ -369,92 +435,98 @@ def configurezkauth(request):
         return redirect(_kite_login_url(user.api_key))
 
     if request.method == 'POST':
-        if request.POST.get('action') == 'edit_credentials':
-            edit_form = EditKiteCredentialsForm(request.POST)
-            if edit_form.is_valid():
-                user = get_object_or_404(KiteUser, zk_user_id=edit_form.cleaned_data['zk_user_id'])
-                if not is_admin(request.user) and user.owner_id != request.user.id:
-                    return redirect('configurezkauth')
+        action = request.POST.get('action', '')
 
-                new_api_key = (edit_form.cleaned_data.get('api_key') or '').strip()
-                new_api_secret = (edit_form.cleaned_data.get('api_secret') or '').strip()
-                clear_api_key = edit_form.cleaned_data.get('clear_api_key')
-                clear_api_secret = edit_form.cleaned_data.get('clear_api_secret')
-                token_binding_changed = False
-
-                if clear_api_key:
-                    if user.api_key is not None:
-                        user.api_key = None
-                        token_binding_changed = True
-                elif new_api_key and new_api_key != user.api_key:
-                    exists = KiteUser.objects.exclude(pk=user.pk).filter(api_key=new_api_key).exists()
-                    if exists:
-                        context['page_message'] = 'API key is already in use by another Zerodha user.'
-                        context['page_message_type'] = 'danger'
-                        context['form'] = AddUserForm()
-                        context['rows'] = _user_rows(request.user, owner_filter)
-                        return render(request, 'app/adduser.html', context)
-                    user.api_key = new_api_key
-                    token_binding_changed = True
-
-                if clear_api_secret:
-                    if user.api_secret:
-                        user.api_secret = ''
-                        token_binding_changed = True
-                elif new_api_secret:
-                    user.api_secret = new_api_secret
-                    token_binding_changed = True
-
-                if token_binding_changed:
-                    user.access_token = ''
-                    user.refresh_token = ''
-
-                user.save()
-                context['page_message'] = 'API credentials updated successfully for {0}.'.format(user.zk_user_id)
-                context['page_message_type'] = 'success'
-            else:
-                context['page_message'] = 'Invalid edit request. Please review the entered fields.'
-                context['page_message_type'] = 'danger'
-
-            context['form'] = AddUserForm()
-            context['rows'] = _user_rows(request.user, owner_filter)
-            return render(request, 'app/adduser.html', context)
-
-        form = AddUserForm(request.POST)
-        if form.is_valid():
-            cleaned = form.cleaned_data
-            existing = KiteUser.objects.filter(api_key=cleaned['api_key']).first()
-            if existing and existing.owner_id != request.user.id and not is_admin(request.user):
-                context['success'] = False
-                context['result'] = True
-                context['message'] = 'This API key is already configured for another app user.'
-                context['form'] = form
-                return render(request, 'app/adduser.html', context)
-            # Enforce one Kite account per app login user (one-to-one).
-            owned = KiteUser.objects.filter(owner=request.user).first()
-            if owned and owned.api_key != cleaned['api_key']:
-                context['success'] = False
-                context['result'] = True
-                context['message'] = 'You already have a Zerodha account configured. Remove it before adding another.'
-                context['form'] = form
-                return render(request, 'app/adduser.html', context)
-            user, _created = KiteUser.objects.update_or_create(
-                api_key=cleaned['api_key'],
-                defaults={
-                    'api_secret': cleaned['api_secret'],
-                    # user_name is bootstrapped from the form and later overwritten from /user/profile.
-                    'user_name': cleaned['zerodha_username'],
-                    # user_id is populated/overwritten by /user/profile after auth callback.
-                    'user_id': '',
-                    'owner': request.user,
-                }
+        if action == 'add_user':
+            # AJAX: create credentials-only account and return the card HTML.
+            if own_account:
+                return JsonResponse(
+                    {'ok': False,
+                     'error': 'A Zerodha account is already configured. Edit it, or delete it from Delete ZK User to reconfigure.'},
+                    status=400,
+                )
+            form = ConfigureKiteForm(request.POST)
+            if not form.is_valid():
+                return JsonResponse({'ok': False, 'error': _first_form_error(form)}, status=400)
+            account, error = _configure_create_account(request, form.cleaned_data)
+            if error:
+                return JsonResponse({'ok': False, 'error': error}, status=400)
+            card_html = render_to_string(
+                'app/_account_card.html',
+                {'own_account': account, 'own_account_data': _account_payload(account)},
+                request=request,
             )
-            request.session['pending_zk_user_id'] = user.zk_user_id
-            return redirect(_kite_login_url(user.api_key))
-    else:
-        form = AddUserForm()
-    context['form'] = form
-    return render(request, 'app/adduser.html', context)
+            return JsonResponse({'ok': True, 'card_html': card_html})
+
+        if action == 'authenticate':
+            # Create the account if needed, then redirect into Zerodha OAuth.
+            account = own_account
+            if account is None:
+                form = ConfigureKiteForm(request.POST)
+                if not form.is_valid():
+                    return render(request, 'app/adduser.html',
+                                  _configure_context(request, admin, None, _first_form_error(form), 'danger'))
+                account, error = _configure_create_account(request, form.cleaned_data)
+                if error:
+                    return render(request, 'app/adduser.html',
+                                  _configure_context(request, admin, None, error, 'danger'))
+            if not account.api_key or not account.api_secret:
+                return render(request, 'app/adduser.html',
+                              _configure_context(request, admin, account,
+                                                 'API key and API secret are required to authenticate. Edit the account first.',
+                                                 'danger'))
+            request.session['pending_zk_user_id'] = account.zk_user_id
+            return redirect(_kite_login_url(account.api_key))
+
+        if action == 'edit_credentials':
+            message, message_type = _configure_edit_credentials(request, admin)
+            own_account = KiteUser.objects.filter(owner=request.user).first()
+            return render(request, 'app/adduser.html',
+                          _configure_context(request, admin, own_account, message, message_type))
+
+    return render(request, 'app/adduser.html', _configure_context(request, admin, own_account))
+
+
+def _configure_edit_credentials(request, admin):
+    """Applies an edit/clear of API key & secret; returns (message, type)."""
+    edit_form = EditKiteCredentialsForm(request.POST)
+    if not edit_form.is_valid():
+        return 'Invalid edit request. Please review the entered fields.', 'danger'
+
+    user = get_object_or_404(KiteUser, zk_user_id=edit_form.cleaned_data['zk_user_id'])
+    if not admin and user.owner_id != request.user.id:
+        return 'You are not allowed to edit this account.', 'danger'
+
+    new_api_key = (edit_form.cleaned_data.get('api_key') or '').strip()
+    new_api_secret = (edit_form.cleaned_data.get('api_secret') or '').strip()
+    clear_api_key = edit_form.cleaned_data.get('clear_api_key')
+    clear_api_secret = edit_form.cleaned_data.get('clear_api_secret')
+    token_binding_changed = False
+
+    if clear_api_key:
+        if user.api_key is not None:
+            user.api_key = None
+            token_binding_changed = True
+    elif new_api_key and new_api_key != user.api_key:
+        if KiteUser.objects.exclude(pk=user.pk).filter(api_key=new_api_key).exists():
+            return 'API key is already in use by another Zerodha user.', 'danger'
+        user.api_key = new_api_key
+        token_binding_changed = True
+
+    if clear_api_secret:
+        if user.api_secret:
+            user.api_secret = ''
+            token_binding_changed = True
+    elif new_api_secret:
+        user.api_secret = new_api_secret
+        token_binding_changed = True
+
+    if token_binding_changed:
+        user.access_token = ''
+        user.refresh_token = ''
+
+    user.save()
+    return 'API credentials updated successfully for {0}.'.format(user.zk_user_id), 'success'
 
 
 @login_required(login_url='login')
@@ -492,17 +564,17 @@ def kite_callback(request):
         except KiteException as ex:
             message = 'Authentication failed: {0}'.format(ex)
 
+    own_account = KiteUser.objects.filter(owner=request.user).first()
     return render(
         request,
         'app/adduser.html',
-        {
-            'title': 'Configure ZK Auth',
-            'year': datetime.now().year,
-            'form': AddUserForm(),
-            'result': True,
-            'success': success,
-            'message': message,
-        }
+        _configure_context(
+            request,
+            is_admin(request.user),
+            own_account,
+            message,
+            'success' if success else 'danger',
+        ),
     )
 
 
@@ -700,6 +772,22 @@ def _empty_trade_data():
     }
 
 
+def _request_api_key(request):
+    """Resolves the selected account's api_key without relying on the URL query.
+
+    Order of precedence:
+      1. ``X-Api-Key`` request header (keeps the key out of URLs, server logs
+         and browser history).
+      2. POST body (normal form submissions).
+      3. GET query string, retained only as a fallback for server-issued
+         redirects (for example the post-order redirect back to /trade).
+    """
+    header_key = request.headers.get('X-Api-Key', '')
+    if header_key:
+        return header_key
+    return request.POST.get('api_key') or request.GET.get('api_key', '')
+
+
 @login_required(login_url='login')
 def trade(request):
     """Shows trading data for a selected authenticated user."""
@@ -708,7 +796,7 @@ def trade(request):
     users = KiteUser.objects.select_related('owner').order_by('user_name')
     if not trade_all:
         users = users.filter(owner=request.user)
-    selected = request.GET.get('api_key', '')
+    selected = _request_api_key(request)
     context = {
         'title': 'Trade',
         'year': datetime.now().year,
@@ -734,7 +822,7 @@ def trade(request):
 
 @login_required(login_url='login')
 def trade_refresh_data(request):
-    api_key = request.GET.get('api_key', '')
+    api_key = _request_api_key(request)
     selected_api_key = request.GET.get('selected_api_key', '')
     if api_key == 'all':
         if not can_trade_all(request.user):
@@ -835,7 +923,7 @@ def _get_instruments(kite, exchange):
 @login_required(login_url='login')
 def instruments_search(request):
     """JSON: best-match tradingsymbols for a query on an exchange."""
-    kite = _user_kite(request.GET.get('api_key', ''), request.user)
+    kite = _user_kite(_request_api_key(request), request.user)
     if not kite:
         return JsonResponse({'results': []})
     query = request.GET.get('q', '').upper()
@@ -854,7 +942,7 @@ def instruments_search(request):
 @login_required(login_url='login')
 def instruments_all(request):
     """JSON: full NSE+BSE symbol list for client-side autocomplete (cached)."""
-    kite = _user_kite(request.GET.get('api_key', ''), request.user)
+    kite = _user_kite(_request_api_key(request), request.user)
     if not kite:
         return JsonResponse({'results': []})
     out = []
@@ -869,7 +957,7 @@ def instruments_all(request):
 @login_required(login_url='login')
 def quote(request):
     """JSON: last price and upper/lower circuit for an exchange:symbol."""
-    kite = _user_kite(request.GET.get('api_key', ''), request.user)
+    kite = _user_kite(_request_api_key(request), request.user)
     symbol = request.GET.get('symbol', '')
     exchange = request.GET.get('exchange', 'NSE')
     if not kite or not symbol:

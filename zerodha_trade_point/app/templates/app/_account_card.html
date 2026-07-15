@@ -1,0 +1,73 @@
+{% load static %}
+<div class="panel panel-default" id="accountCard">
+    <div class="panel-heading"><strong>Configured Zerodha account</strong></div>
+    <div class="panel-body">
+        <table class="table table-condensed" style="margin-bottom:15px;">
+            <tbody>
+                <tr><th style="width:230px;">App user (username)</th><td>{{ own_account_data.app_username }}</td></tr>
+                <tr><th>App user ID</th><td>{{ own_account_data.app_user_id }}</td></tr>
+                <tr><th>Zerodha username</th><td>{{ own_account_data.user_name|default:"(pending profile sync)" }}</td></tr>
+                <tr><th>Zerodha email</th><td>{{ own_account_data.email|default:"-" }}</td></tr>
+                <tr><th>Zerodha user ID</th><td>{{ own_account_data.user_id|default:"-" }}</td></tr>
+                <tr>
+                    <th>API key</th>
+                    <td>
+                        <span class="masked-value">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</span>
+                        <span class="real-value" style="display:none; word-break:break-all;"><code>{{ own_account_data.api_key|default:"-" }}</code></span>
+                        <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
+                    </td>
+                </tr>
+                <tr>
+                    <th>API secret</th>
+                    <td>
+                        <span class="masked-value">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</span>
+                        <span class="real-value" style="display:none; word-break:break-all;"><code>{{ own_account_data.api_secret|default:"-" }}</code></span>
+                        <button type="button" class="btn btn-link btn-xs reveal-btn">Reveal</button>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Access token status</th>
+                    <td data-token-key="{{ own_account_data.zk_user_id }}">
+                        <span class="label {{ own_account_data.status_css }}">{{ own_account_data.status_label }}</span>
+                        <span class="help-block status-countdown" style="display:inline; margin-left:12px; font-size:11px;" id="accountStatusCountdown"></span>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+
+        <form method="post" action="{% url 'configurezkauth' %}" style="display:inline;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="authenticate" />
+            <button type="submit" class="btn btn-primary">Authenticate</button>
+        </form>
+        <button type="button" class="btn btn-info" id="checkStatusBtn">Check access token status</button>
+        <button type="button" class="btn btn-default" id="editAccountBtn">Edit</button>
+
+        <div id="editAccountForm" style="display:none; margin-top:15px; background:#fafafa; padding:12px; border:1px solid #eee;">
+            <form method="post" action="{% url 'configurezkauth' %}" class="form-horizontal" style="margin-bottom:0;">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="edit_credentials" />
+                <input type="hidden" name="zk_user_id" value="{{ own_account_data.zk_user_id }}" />
+                <div class="row" style="margin:0;">
+                    <div class="col-sm-5" style="padding:0 10px 8px 0;">
+                        <label>API Key</label>
+                        <input type="text" name="api_key" class="form-control" value="{{ own_account_data.api_key }}" />
+                        <label class="checkbox-inline" style="margin-top:4px;"><input type="checkbox" name="clear_api_key" value="1" /> Clear</label>
+                    </div>
+                    <div class="col-sm-5" style="padding:0 10px 8px 0;">
+                        <label>API Secret</label>
+                        <input type="password" name="api_secret" class="form-control" placeholder="Leave blank to keep current" />
+                        <label class="checkbox-inline" style="margin-top:4px;"><input type="checkbox" name="clear_api_secret" value="1" /> Clear</label>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-success btn-sm">Save</button>
+                <button type="button" class="btn btn-default btn-sm" id="cancelEditBtn">Cancel</button>
+            </form>
+        </div>
+
+        <p class="help-block" style="margin-top:12px;">
+            A Zerodha account is already configured. To reconfigure, edit the fields above, or delete it from
+            <a href="{% url 'deletezkuser' %}">Delete ZK User</a> and configure again.
+        </p>
+    </div>
+</div>

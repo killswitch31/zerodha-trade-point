@@ -262,6 +262,9 @@ def managezkusers(request):
                 except User.DoesNotExist:
                     message = 'User not found.'
                     message_type = 'danger'
+            else:
+                message = _first_form_error(form)
+                message_type = 'danger'
         
         else:
             # Add new user
@@ -277,7 +280,14 @@ def managezkusers(request):
                 profile.save()
                 message = f'User "{new_user.username}" created successfully.'
                 message_type = 'success'
-    
+            else:
+                message = _first_form_error(form)
+                message_type = 'danger'
+
+        # Post/Redirect/Get: never re-render a POST (a refresh must not resubmit).
+        _set_flash(request, message or 'No changes were made.', message_type or 'info')
+        return redirect('managezkusers')
+
     # Prepare forms for display
     add_form = ManageZkUserForm()
     
@@ -304,14 +314,15 @@ def managezkusers(request):
             'edit_form': EditAppUserForm(initial={'role': role}) if not u.is_superuser else None,
         })
     
+    flash = _pop_flash(request)
     return render(request, 'app/managezkusers.html', {
         'title': 'Manage ZK Users',
         'year': datetime.now().year,
         'form': add_form,
         'rows': rows,
         'app_users': app_users,
-        'message': message,
-        'message_type': message_type,
+        'message': flash['message'] if flash else None,
+        'message_type': flash['type'] if flash else None,
     })
 
 
@@ -342,6 +353,17 @@ def token_statuses(request):
 def _owner_choices():
     """App login users who own a Kite account (admin owner dropdowns)."""
     return User.objects.filter(kite_user__isnull=False).order_by('username')
+
+
+def _set_flash(request, message, kind='success'):
+    """Stores a one-time flash message in the session (for PRG redirects)."""
+    if message:
+        request.session['flash'] = {'message': message, 'type': kind}
+
+
+def _pop_flash(request):
+    """Returns and clears the session flash message, if any."""
+    return request.session.pop('flash', None)
 
 
 def _account_payload(account):
@@ -375,8 +397,12 @@ def _first_form_error(form):
     return 'Please correct the highlighted fields.'
 
 
-def _configure_context(request, admin, own_account, message=None, message_type=None):
-    """Builds the shared render context for the configure page."""
+def _configure_context(request, admin, own_account):
+    """Builds the shared render context for the configure page.
+
+    Pops a one-time session flash message set before a PRG redirect.
+    """
+    flash = _pop_flash(request)
     owner_filter = request.GET.get('owner', '') if admin else ''
     return {
         'title': 'Configure ZK Auth',
@@ -389,8 +415,8 @@ def _configure_context(request, admin, own_account, message=None, message_type=N
         'own_account': own_account,
         'own_account_data': _account_payload(own_account) if own_account else None,
         'form': ConfigureKiteForm(),
-        'page_message': message,
-        'page_message_type': message_type,
+        'page_message': flash['message'] if flash else None,
+        'page_message_type': flash['type'] if flash else None,
     }
 
 
@@ -464,25 +490,22 @@ def configurezkauth(request):
             if account is None:
                 form = ConfigureKiteForm(request.POST)
                 if not form.is_valid():
-                    return render(request, 'app/adduser.html',
-                                  _configure_context(request, admin, None, _first_form_error(form), 'danger'))
+                    _set_flash(request, _first_form_error(form), 'danger')
+                    return redirect('configurezkauth')
                 account, error = _configure_create_account(request, form.cleaned_data)
                 if error:
-                    return render(request, 'app/adduser.html',
-                                  _configure_context(request, admin, None, error, 'danger'))
+                    _set_flash(request, error, 'danger')
+                    return redirect('configurezkauth')
             if not account.api_key or not account.api_secret:
-                return render(request, 'app/adduser.html',
-                              _configure_context(request, admin, account,
-                                                 'API key and API secret are required to authenticate. Edit the account first.',
-                                                 'danger'))
+                _set_flash(request, 'API key and API secret are required to authenticate. Edit the account first.', 'danger')
+                return redirect('configurezkauth')
             request.session['pending_zk_user_id'] = account.zk_user_id
             return redirect(_kite_login_url(account.api_key))
 
         if action == 'edit_credentials':
             message, message_type = _configure_edit_credentials(request, admin)
-            own_account = KiteUser.objects.filter(owner=request.user).first()
-            return render(request, 'app/adduser.html',
-                          _configure_context(request, admin, own_account, message, message_type))
+            _set_flash(request, message, message_type)
+            return redirect('configurezkauth')
 
     return render(request, 'app/adduser.html', _configure_context(request, admin, own_account))
 
@@ -564,18 +587,8 @@ def kite_callback(request):
         except KiteException as ex:
             message = 'Authentication failed: {0}'.format(ex)
 
-    own_account = KiteUser.objects.filter(owner=request.user).first()
-    return render(
-        request,
-        'app/adduser.html',
-        _configure_context(
-            request,
-            is_admin(request.user),
-            own_account,
-            message,
-            'success' if success else 'danger',
-        ),
-    )
+    _set_flash(request, message, 'success' if success else 'danger')
+    return redirect('configurezkauth')
 
 
 def _scalar_value(value):
@@ -792,11 +805,17 @@ def _request_api_key(request):
 def trade(request):
     """Shows trading data for a selected authenticated user."""
     assert isinstance(request, HttpRequest)
+    # Post/Redirect/Get: the account picker posts here. Store the choice in the
+    # session and redirect, so a page refresh never resubmits the selection.
+    if request.method == 'POST':
+        request.session['trade_selected_api_key'] = request.POST.get('api_key', '')
+        return redirect('trade')
+
     trade_all = can_trade_all(request.user)
     users = KiteUser.objects.select_related('owner').order_by('user_name')
     if not trade_all:
         users = users.filter(owner=request.user)
-    selected = _request_api_key(request)
+    selected = _request_api_key(request) or request.session.get('trade_selected_api_key', '')
     context = {
         'title': 'Trade',
         'year': datetime.now().year,
@@ -807,7 +826,11 @@ def trade(request):
         'banner_level': 'success' if request.GET.get('level') == 'success' else 'danger',
     }
     if selected:
-        user = get_object_or_404(KiteUser, api_key=selected)
+        user = KiteUser.objects.filter(api_key=selected).first()
+        if not user:
+            # Stale/invalid selection (for example a deleted account): ignore it.
+            context['selected'] = ''
+            return render(request, 'app/trade.html', context)
         if not trade_all and user.owner_id != request.user.id:
             context['error'] = 'Not authorized for this account.'
             return render(request, 'app/trade.html', context)

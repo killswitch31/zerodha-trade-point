@@ -307,7 +307,8 @@ class ConfigureZkAuthEditApiCredentialsTests(TestCase):
             'api_key': 'owner-api-new',
             'api_secret': 'owner-secret-new',
         })
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], reverse('configurezkauth'))
         self.kite_user.refresh_from_db()
         self.assertEqual(self.kite_user.api_key, 'owner-api-new')
         self.assertEqual(self.kite_user.api_secret, 'owner-secret-new')
@@ -324,7 +325,7 @@ class ConfigureZkAuthEditApiCredentialsTests(TestCase):
             'clear_api_key': '1',
             'clear_api_secret': '1',
         })
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 302)
         self.kite_user.refresh_from_db()
         self.assertIsNone(self.kite_user.api_key)
         self.assertEqual(self.kite_user.api_secret, '')
@@ -337,8 +338,7 @@ class ConfigureZkAuthEditApiCredentialsTests(TestCase):
             'api_key': 'hijack',
             'api_secret': 'hijack-secret',
         })
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'not allowed')
+        self.assertEqual(response.status_code, 302)
         self.kite_user.refresh_from_db()
         self.assertEqual(self.kite_user.api_key, 'owner-api')
 
@@ -431,6 +431,7 @@ class TradeDropdownScopingTests(TestCase):
     def test_self_only_sees_only_own_users_regardless_of_token(self):
         request = self.factory.get(reverse('trade'))
         request.user = self.owner
+        request.session = {}
 
         response = trade(request)
 
@@ -441,6 +442,7 @@ class TradeDropdownScopingTests(TestCase):
     def test_trader_all_sees_all_users_regardless_of_token(self):
         request = self.factory.get(reverse('trade'))
         request.user = self.trader
+        request.session = {}
 
         response = trade(request)
 
@@ -1021,82 +1023,75 @@ class ManageZkUsersFlowTests(TestCase):
         self.admin_user = User.objects.create_superuser(username='super', email='super@example.com', password='super-pass')
         self.target_user = User.objects.create_user(username='target-user', password='target-pass')
 
+    def _post(self, payload):
+        request = self.factory.post(reverse('managezkusers'), payload)
+        request.user = self.admin_user
+        request.session = {}
+        return request, managezkusers(request)
+
     def test_admin_can_add_app_user(self):
-        request = self.factory.post(reverse('managezkusers'), {
+        request, response = self._post({
             'username': 'new-user',
             'password': 'new-pass-123',
             'role': Profile.TRADER_ALL,
         })
-        request.user = self.admin_user
 
-        response = managezkusers(request)
-
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], reverse('managezkusers'))
         created_user = User.objects.get(username='new-user')
         self.assertEqual(created_user.profile.role, Profile.TRADER_ALL)
+        self.assertIn('created successfully', request.session['flash']['message'])
 
     def test_admin_can_edit_existing_user(self):
-        request = self.factory.post(reverse('managezkusers'), {
+        request, response = self._post({
             'action': 'edit',
             'user_id': self.target_user.id,
             'password': 'changed-pass-123',
             'role': Profile.ADMIN_ONLY,
         })
-        request.user = self.admin_user
-
-        response = managezkusers(request)
         self.target_user.refresh_from_db()
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 302)
         self.assertEqual(self.target_user.profile.role, Profile.ADMIN_ONLY)
         self.assertTrue(self.target_user.check_password('changed-pass-123'))
+        self.assertIn('updated successfully', request.session['flash']['message'])
 
     def test_admin_cannot_delete_superuser(self):
-        request = self.factory.post(reverse('managezkusers'), {
+        request, response = self._post({
             'action': 'delete',
             'user_id': self.admin_user.id,
         })
-        request.user = self.admin_user
 
-        response = managezkusers(request)
-
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 302)
         self.assertTrue(User.objects.filter(id=self.admin_user.id).exists())
+        self.assertIn('Cannot delete superuser', request.session['flash']['message'])
 
     def test_admin_sees_user_not_found_messages_for_missing_targets(self):
-        delete_request = self.factory.post(reverse('managezkusers'), {
+        delete_request, delete_response = self._post({
             'action': 'delete',
             'user_id': 999999,
         })
-        delete_request.user = self.admin_user
-        delete_response = managezkusers(delete_request)
-
-        edit_request = self.factory.post(reverse('managezkusers'), {
+        edit_request, edit_response = self._post({
             'action': 'edit',
             'user_id': 999999,
             'role': Profile.ADMIN_ONLY,
         })
-        edit_request.user = self.admin_user
-        edit_response = managezkusers(edit_request)
 
-        self.assertEqual(delete_response.status_code, 200)
-        self.assertContains(delete_response, 'User not found.')
-        self.assertEqual(edit_response.status_code, 200)
-        self.assertContains(edit_response, 'User not found.')
+        self.assertEqual(delete_response.status_code, 302)
+        self.assertIn('User not found.', delete_request.session['flash']['message'])
+        self.assertEqual(edit_response.status_code, 302)
+        self.assertIn('User not found.', edit_request.session['flash']['message'])
 
     def test_admin_cannot_edit_superuser(self):
-        request = self.factory.post(reverse('managezkusers'), {
+        request, response = self._post({
             'action': 'edit',
             'user_id': self.admin_user.id,
             'password': 'new-super-pass',
             'role': Profile.ADMIN_ONLY,
         })
-        request.user = self.admin_user
 
-        response = managezkusers(request)
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Cannot modify superuser accounts.')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('Cannot modify superuser', request.session['flash']['message'])
 
 
 class KiteCallbackFlowTests(TestCase):
@@ -1126,7 +1121,9 @@ class KiteCallbackFlowTests(TestCase):
         response = kite_callback(request)
         self.kite_user.refresh_from_db()
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], reverse('configurezkauth'))
+        self.assertEqual(request.session['flash']['type'], 'success')
         self.assertEqual(self.kite_user.access_token, 'callback-access')
         self.assertEqual(self.kite_user.refresh_token, 'callback-refresh')
         self.assertEqual(self.kite_user.user_name, 'Callback User')
@@ -1395,8 +1392,9 @@ class AdditionalConfigureAndCallbackTests(TestCase):
 
         response = configurezkauth(request)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Invalid edit request. Please review the entered fields.')
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], reverse('configurezkauth'))
+        self.assertIn('Invalid edit request', request.session['flash']['message'])
 
     @patch('app.views._auth_status', return_value='active')
     def test_configurezkauth_edit_noop_still_succeeds_without_clearing_tokens(self, _mock_status):
@@ -1415,8 +1413,8 @@ class AdditionalConfigureAndCallbackTests(TestCase):
         response = configurezkauth(request)
         self.kite_user.refresh_from_db()
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'API credentials updated successfully')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('API credentials updated successfully', request.session['flash']['message'])
         self.assertEqual(self.kite_user.access_token, 'keep-token')
         self.assertEqual(self.kite_user.refresh_token, 'keep-refresh')
 
@@ -1439,20 +1437,23 @@ class AdditionalConfigureAndCallbackTests(TestCase):
         request.user = self.user
         request.session = {}
         response = kite_callback(request)
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Kite login was not successful: cancelled')
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], reverse('configurezkauth'))
+        self.assertIn('Kite login was not successful: cancelled', request.session['flash']['message'])
 
         request = self.factory.get(reverse('kite_callback'), {'status': 'success'})
         request.user = self.user
         request.session = {}
         response = kite_callback(request)
-        self.assertContains(response, 'Missing request_token in redirect.')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('Missing request_token in redirect.', request.session['flash']['message'])
 
         request = self.factory.get(reverse('kite_callback'), {'request_token': 'req-1', 'status': 'success'})
         request.user = self.user
         request.session = {}
         response = kite_callback(request)
-        self.assertContains(response, 'No pending user to authenticate. Start from Configure ZK Auth.')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('No pending user to authenticate.', request.session['flash']['message'])
 
     @patch('app.views._auth_status', return_value='active')
     @patch('app.views._kite_login_url', return_value='https://example.com/reauth')
@@ -1473,14 +1474,16 @@ class AdditionalConfigureAndCallbackTests(TestCase):
         request.user = self.user
         request.session = {}
         response = kite_callback(request)
-        self.assertContains(response, 'No stored user for that API key.')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('No stored user for that API key.', request.session['flash']['message'])
 
         mock_make_kite.return_value.generate_session.side_effect = KiteException('bad token')
         request = self.factory.get(reverse('kite_callback'), {'request_token': 'req-1', 'status': 'success'})
         request.user = self.user
         request.session = {'pending_zk_user_id': self.kite_user.zk_user_id}
         response = kite_callback(request)
-        self.assertContains(response, 'Authentication failed: bad token')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('Authentication failed: bad token', request.session['flash']['message'])
 
 
 class AdditionalTradeFlowTests(TestCase):
@@ -2081,7 +2084,7 @@ class ApiKeyTransportTests(TestCase):
         mock_trade_data.return_value = _empty_trade_data()
         self.client.force_login(self.user)
 
-        response = self.client.post(reverse('trade'), {'api_key': 'hdr-api'})
+        response = self.client.post(reverse('trade'), {'api_key': 'hdr-api'}, follow=True)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context['selected'], 'hdr-api')

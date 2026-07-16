@@ -23,6 +23,7 @@ The suite includes:
 - Post/Redirect/Get form-submission tests
 - market data endpoint tests
 - helper and fallback branch tests
+- negative / edge-case tests for each endpoint (invalid input, unauthenticated Kite client, ownership violations, duplicate/missing values)
 - integration-style login and trade flow tests
 
 ## Prerequisites
@@ -109,11 +110,11 @@ Then open:
 
 ## Current Coverage Baseline
 
-Latest measured baseline in this workspace:
+Latest measured baseline in this workspace (148 tests):
 
-- total coverage: `91.70%`
-- `app/views.py`: `89.83%`
-- `app/forms.py`: `97.73%`
+- total coverage: `94.42%`
+- `app/views.py`: `93.41%`
+- `app/forms.py`: `97.96%`
 - `app/models.py`: `100.00%`
 - `app/admin.py`: `100.00%`
 - `app/context_processors.py`: `100.00%`

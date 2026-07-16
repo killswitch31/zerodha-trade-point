@@ -2162,3 +2162,352 @@ class ApiKeyTransportTests(TestCase):
         self.assertEqual(mock_user_kite.call_args[0][0], 'hdr-api')
 
 
+class ConfigureZkAuthRenderTests(TestCase):
+    """GET renders of /configurezkauth: add form, account card, and flash."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='render-user', password='render-pass')
+
+    def _get(self, session=None):
+        request = self.factory.get(reverse('configurezkauth'))
+        request.user = self.user
+        request.session = session if session is not None else {}
+        return request, configurezkauth(request)
+
+    def test_get_shows_add_form_when_no_account(self):
+        _request, response = self._get()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="addForm"')
+        self.assertNotContains(response, 'id="accountCard"')
+
+    @patch('app.views._auth_status', return_value='active')
+    def test_get_shows_card_when_account_exists(self, _mock_status):
+        KiteUser.objects.create(
+            owner=self.user, api_key='render-api', api_secret='s',
+            access_token='t', user_name='Render Kite',
+        )
+
+        _request, response = self._get()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="accountCard"')
+        self.assertNotContains(response, 'id="addForm"')
+
+    def test_get_shows_and_clears_flash_message(self):
+        request, response = self._get(session={'flash': {'message': 'Flashed notice', 'type': 'success'}})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Flashed notice')
+        self.assertNotIn('flash', request.session)
+
+
+class ConfigureZkAuthNegativeTests(TestCase):
+    """Negative paths for the authenticate / add_user / edit actions."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='auth-neg', password='neg-pass')
+        self.other = User.objects.create_user(username='auth-neg-other', password='neg-pass')
+
+    def _post(self, payload):
+        request = self.factory.post(reverse('configurezkauth'), payload)
+        request.user = self.user
+        request.session = {}
+        return request, configurezkauth(request)
+
+    def test_authenticate_invalid_form_flashes_error(self):
+        request, response = self._post({'action': 'authenticate', 'api_key': '', 'api_secret': ''})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], reverse('configurezkauth'))
+        self.assertEqual(request.session['flash']['type'], 'danger')
+        self.assertFalse(KiteUser.objects.filter(owner=self.user).exists())
+
+    def test_authenticate_duplicate_api_key_flashes_error(self):
+        KiteUser.objects.create(owner=self.other, api_key='dup-api', api_secret='s')
+
+        request, response = self._post({'action': 'authenticate', 'api_key': 'dup-api', 'api_secret': 's'})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('already configured', request.session['flash']['message'])
+        self.assertFalse(KiteUser.objects.filter(owner=self.user).exists())
+
+    def test_authenticate_existing_account_missing_secret_flashes_error(self):
+        KiteUser.objects.create(owner=self.user, api_key='nosecret-api', api_secret='')
+
+        request, response = self._post({'action': 'authenticate'})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('API key and API secret are required', request.session['flash']['message'])
+
+    def test_add_user_invalid_form_returns_error_json(self):
+        request, response = self._post({'action': 'add_user', 'api_key': '', 'api_secret': ''})
+        payload = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(payload['ok'])
+        self.assertTrue(payload['error'])
+        self.assertFalse(KiteUser.objects.filter(owner=self.user).exists())
+
+    def test_edit_to_api_key_used_by_another_flashes_error(self):
+        account = KiteUser.objects.create(owner=self.user, api_key='mine-api', api_secret='s', access_token='t')
+        KiteUser.objects.create(owner=self.other, api_key='taken-api', api_secret='s')
+
+        request, response = self._post({
+            'action': 'edit_credentials',
+            'zk_user_id': account.zk_user_id,
+            'api_key': 'taken-api',
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('already in use', request.session['flash']['message'])
+        account.refresh_from_db()
+        self.assertEqual(account.api_key, 'mine-api')
+
+
+class ManageZkUsersRenderAndNegativeTests(TestCase):
+    """GET render plus delete-success and invalid-form negative paths."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.admin_user = User.objects.create_superuser(username='mzk-super', email='mzk@example.com', password='mzk-pass')
+        self.target = User.objects.create_user(username='mzk-target', password='mzk-pass')
+
+    def _post(self, payload):
+        request = self.factory.post(reverse('managezkusers'), payload)
+        request.user = self.admin_user
+        request.session = {}
+        return request, managezkusers(request)
+
+    @patch('app.views._auth_status', return_value='active')
+    def test_get_renders_management_page(self, _mock_status):
+        KiteUser.objects.create(owner=self.target, api_key='mzk-api', access_token='t')
+
+        request = self.factory.get(reverse('managezkusers'))
+        request.user = self.admin_user
+        request.session = {}
+
+        response = managezkusers(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'mzk-target')
+
+    def test_delete_regular_user_removes_user_and_account(self):
+        KiteUser.objects.create(owner=self.target, api_key='mzk-del-api', access_token='t')
+
+        request, response = self._post({'action': 'delete', 'user_id': self.target.id})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(User.objects.filter(id=self.target.id).exists())
+        self.assertFalse(KiteUser.objects.filter(api_key='mzk-del-api').exists())
+        self.assertIn('deleted successfully', request.session['flash']['message'])
+
+    def test_add_duplicate_username_flashes_error(self):
+        request, response = self._post({
+            'username': 'mzk-target',
+            'password': 'another-pass',
+            'role': Profile.SELF_ONLY,
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(request.session['flash']['type'], 'danger')
+        self.assertEqual(User.objects.filter(username='mzk-target').count(), 1)
+
+    def test_edit_invalid_form_flashes_error(self):
+        request, response = self._post({
+            'action': 'edit',
+            'user_id': self.target.id,
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(request.session['flash']['type'], 'danger')
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class TradeSelectionNegativeTests(TestCase):
+    """Trade dashboard ignores a stale/deleted account selection in the session."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='sel-neg', password='sel-pass')
+
+    def test_stale_session_selection_is_ignored(self):
+        self.client.force_login(self.user)
+        session = self.client.session
+        session['trade_selected_api_key'] = 'deleted-api'
+        session.save()
+
+        response = self.client.get(reverse('trade'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['selected'], '')
+
+
+class MarketDataNegativeTests(TestCase):
+    """Market-data and refresh endpoints without an authenticated Kite client."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='md-neg', password='md-pass')
+
+    @patch('app.views._user_kite', return_value=None)
+    def test_instruments_search_without_kite_returns_empty(self, _mock_kite):
+        request = self.factory.get(reverse('instruments_search'), {'q': 'INF'})
+        request.user = self.user
+
+        response = instruments_search(request)
+
+        self.assertEqual(json.loads(response.content), {'results': []})
+
+    @patch('app.views._user_kite', return_value=None)
+    def test_instruments_all_without_kite_returns_empty(self, _mock_kite):
+        request = self.factory.get(reverse('instruments_all'))
+        request.user = self.user
+
+        response = instruments_all(request)
+
+        self.assertEqual(json.loads(response.content), {'results': []})
+
+    @patch('app.views._user_kite', return_value=None)
+    def test_quote_without_kite_returns_not_ok(self, _mock_kite):
+        request = self.factory.get(reverse('quote'), {'symbol': 'INFY'})
+        request.user = self.user
+
+        response = quote(request)
+
+        self.assertEqual(json.loads(response.content), {'ok': False})
+
+    @patch('app.views._user_kite')
+    def test_quote_without_symbol_returns_not_ok(self, mock_kite):
+        mock_kite.return_value = object()
+        request = self.factory.get(reverse('quote'), {'symbol': ''})
+        request.user = self.user
+
+        response = quote(request)
+
+        self.assertEqual(json.loads(response.content), {'ok': False})
+
+    def test_trade_refresh_non_all_unauthorized_returns_403(self):
+        request = self.factory.get(reverse('trade_refresh_data'), {'api_key': 'unknown-api'})
+        request.user = self.user
+
+        response = trade_refresh_data(request)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('Not authorized', json.loads(response.content)['error'])
+
+
+class AdditionalNegativeCoverageTests(TestCase):
+    """Extra negative branches for order/convert/token-renewal paths."""
+
+    class _KiteConvertStub:
+        def __init__(self):
+            self.convert_kwargs = None
+
+        def convert_position(self, **kwargs):
+            self.convert_kwargs = kwargs
+            return True
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='neg-cov', password='neg-pass')
+
+    def _convert(self, payload):
+        request = self.factory.post(reverse('trade_convert_position'), payload)
+        request.user = self.user
+        return request
+
+    @patch('app.views._user_kite')
+    def test_convert_rejects_invalid_position_type(self, mock_kite):
+        kite = self._KiteConvertStub()
+        mock_kite.return_value = kite
+
+        response = trade_convert_position(self._convert({
+            'api_key': 'k', 'exchange': 'NSE', 'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY', 'position_type': 'weekly',
+            'quantity': '2', 'old_product': 'CNC', 'new_product': 'MIS',
+        }))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('level=error', response['Location'])
+        self.assertIsNone(kite.convert_kwargs)
+
+    @patch('app.views._user_kite')
+    def test_convert_rejects_missing_symbol_or_exchange(self, mock_kite):
+        kite = self._KiteConvertStub()
+        mock_kite.return_value = kite
+
+        response = trade_convert_position(self._convert({
+            'api_key': 'k', 'exchange': '', 'tradingsymbol': '',
+            'transaction_type': 'BUY', 'quantity': '2',
+            'old_product': 'CNC', 'new_product': 'MIS',
+        }))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('level=error', response['Location'])
+        self.assertIsNone(kite.convert_kwargs)
+
+    @patch('app.views._user_kite')
+    def test_convert_rejects_missing_products(self, mock_kite):
+        kite = self._KiteConvertStub()
+        mock_kite.return_value = kite
+
+        response = trade_convert_position(self._convert({
+            'api_key': 'k', 'exchange': 'NSE', 'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY', 'quantity': '2',
+            'old_product': '', 'new_product': '',
+        }))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('level=error', response['Location'])
+        self.assertIsNone(kite.convert_kwargs)
+
+    @patch('app.views._user_kite')
+    def test_trade_modify_limit_without_price_errors(self, mock_kite):
+        class _ModifyKite:
+            def modify_order(self, **kwargs):
+                return True
+
+        mock_kite.return_value = _ModifyKite()
+        request = self.factory.post(reverse('trade_modify'), {
+            'api_key': 'k', 'order_id': 'O1', 'quantity': '1', 'order_type': 'LIMIT',
+        })
+        request.user = self.user
+
+        response = trade_modify(request)
+
+        self.assertIn('Modify+failed', response['Location'])
+
+    @patch('app.views._user_kite')
+    def test_trade_place_limit_without_price_errors(self, mock_kite):
+        class _PlaceKite:
+            def quote(self, key):
+                return {key: {'circuit_limit': {'lower': 1, 'upper': 1000}}}
+
+            def place_order(self, **kwargs):
+                return 'OID'
+
+        mock_kite.return_value = _PlaceKite()
+        request = self.factory.post(reverse('trade_place'), {
+            'api_key': 'k', 'exchange': 'NSE', 'tradingsymbol': 'INFY',
+            'transaction_type': 'BUY', 'quantity': '1', 'order_type': 'LIMIT',
+        })
+        request.user = self.user
+
+        response = trade_place(request)
+
+        self.assertIn('Place+failed', response['Location'])
+
+    @patch('app.views._make_kite')
+    def test_renew_access_token_returns_false_on_kite_exception(self, mock_make_kite):
+        account = KiteUser.objects.create(
+            owner=self.user, api_key='renew-x', api_secret='s', refresh_token='rt',
+        )
+        mock_make_kite.return_value.renew_access_token.side_effect = KiteException('renew failed')
+
+        self.assertFalse(_renew_access_token(account))
+
+
+
+

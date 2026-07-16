@@ -359,12 +359,12 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE).
 
 - Django `User`: app login account.
 - `Profile` (one-to-one with `User`): stores role (`self_only`, `admin_only`, `trader_all`).
-- `KiteUser` (many-to-one to `User` via `owner`): one Zerodha app credential set per API key.
+- `KiteUser` (one-to-one with `User` via `owner`): the single Zerodha credential set and tokens owned by that app user. Each `api_key` is globally unique, so no two app users can share an API key.
 
 In short:
 
 - One app user has exactly one profile.
-- One app user can own many Zerodha (`KiteUser`) accounts.
+- One app user owns at most one Zerodha (`KiteUser`) account.
 
 ### Zerodha token lifecycle
 
@@ -383,9 +383,9 @@ In short:
 
 ### `self_only`
 
-- Can configure only their own Zerodha accounts.
-- Can delete only their own configured Zerodha accounts.
-- Can trade only their own Zerodha accounts.
+- Can configure only their own Zerodha account.
+- Can delete only their own configured Zerodha account.
+- Can trade only their own Zerodha account.
 - Cannot access `Manage Users`.
 
 ### `trader_all`
@@ -398,21 +398,36 @@ In short:
 
 Page: `/configurezkauth/`
 
-1. Open `Configure ZK Auth` from Home.
-2. Enter `API Key` and `API Secret`.
-3. Click `Authenticate`.
-4. Complete Zerodha OAuth and return to callback.
-5. App stores user metadata and tokens.
+Each app user configures a single Zerodha account here.
 
-On this page you can also:
+If no account is configured yet, a form is shown with:
 
-- View all permitted stored accounts (scoped by role).
-- See masked API key and secret with reveal buttons.
-- Check token validity on-demand with `Check Access Token Validity`.
-- Watch 10-minute token status recheck countdown.
-- Re-authenticate an account when status needs re-authentication.
+- `Zerodha User ID` (optional)
+- `API Key` (required)
+- `API Secret` (required)
 
-Redirect URL to configure in Zerodha app is shown on this page and can be copied directly.
+and three buttons:
+
+- `Clear` — resets the form fields.
+- `Add User` — saves the credentials and shows the account card without reloading the page (no token is fetched yet; status shows `Needs Authentication`).
+- `Authenticate` — saves the credentials if needed, then starts the Zerodha OAuth flow. After the callback returns, tokens are stored and the card shows `Active`.
+
+Once an account is configured, the page shows a details card with:
+
+- App user username and app user ID.
+- Zerodha username, email, and user ID.
+- Masked `API Key` and `API Secret`, each with a reveal button.
+- Access-token status (`Active` / `Needs Authentication`), validated by a live Zerodha API call.
+- `Authenticate` — (re)runs the OAuth flow and overwrites the stored access/refresh tokens.
+- `Check access token status` — probes the live Zerodha API and updates the badge.
+- `Edit` — edit or clear the `API Key` / `API Secret` (clearing credentials invalidates stored tokens).
+- A 10-minute auto-recheck with a visible countdown.
+
+Because each app user owns only one account, the add form is hidden once an account exists. To reconfigure, edit the fields on the card, or delete the account from `/deletezkuser/` and configure again.
+
+Admins additionally see an all-accounts table (with an owner filter) below the card.
+
+The Redirect URL to configure in your Zerodha app is shown on this page and can be copied directly.
 
 ## How Admin Manages App Users
 
@@ -434,7 +449,7 @@ Redirect URL to configure in Zerodha app is shown on this page and can be copied
 
 ### Delete user
 
-- Deletes app login user and all their associated Zerodha (`KiteUser`) records.
+- Deletes the app login user and their associated Zerodha (`KiteUser`) account.
 - Superuser accounts are protected from this delete flow.
 
 ## Trade Dashboard (`/trade/`) End-Panel Guide
@@ -481,6 +496,7 @@ Disclaimer:
 ### Holdings and positions panels
 
 - Displays row-level P&L and total P&L for holdings and positions.
+- Each open position has a `Convert` action to switch its margin product (for example `CNC` <-> `MIS`).
 
 ## Key Routes
 
@@ -490,11 +506,17 @@ Disclaimer:
 - `/managezkusers/` Admin user management
 - `/deletezkuser/` Delete configured Zerodha account
 - `/trade/` Trade dashboard
+- `/trade/refresh/` Live trade data (AJAX)
+- `/trade/place/`, `/trade/modify/`, `/trade/cancel/`, `/trade/convert/` Order actions
+- `/trade/instruments/`, `/trade/instruments-all/`, `/trade/quote/` Market data
 - `/kite/callback/` Zerodha OAuth callback
 - `/token-statuses/` Live token status API
 
 ## Notes
 
-- Default DB is SQLite (`db.sqlite3`).
+- Default DB is SQLite (`db.sqlite3`). SQLite/`.db` files are git-ignored.
+- On the trade dashboard, the selected account's `api_key` is sent to the server via the `X-Api-Key` request header or POST body (never in the URL query string), keeping it out of server logs and browser history. This applies only to the web app; Zerodha Kite API calls are unchanged.
+- All form submissions use Post/Redirect/Get, so a browser refresh never resubmits a form — it reloads the page with default values.
+- Each app user owns at most one Zerodha account, and API keys are globally unique.
 - Keep secrets out of git.
 - Review `.gitignore` before adding new infra/tooling files.

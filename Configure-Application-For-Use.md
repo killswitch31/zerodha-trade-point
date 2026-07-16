@@ -27,10 +27,10 @@ Follow this guide to configure Zerodha accounts for use in Zerodha-Trade-Point.
      - API Key
      - API Secret
 15. Each user logs in to Zerodha-Trade-Point and opens Configure ZK Auth.
-16. Each user enters their API Key and API Secret, then starts the authentication flow.
+16. Each user enters their API Key and API Secret (Zerodha User ID is optional) and clicks Authenticate to start the authentication flow. (The Add User button just saves the credentials without authenticating yet.)
 17. Zerodha-Trade-Point opens the Zerodha Kite login page. The user enters Kite credentials and authorizes the app.
 18. After successful authentication, Access Token Status should show Active.
-19. If status later shows Needs reauthentication, click Re-Authenticate and complete the same flow again.
+19. If status later shows Needs Authentication, click Authenticate and complete the same flow again.
 20. Log in using the trader account and open the Trade dashboard.
 21. Use the top dropdown to select a configured Zerodha account and load account and trade data.
 22. Place a valid order. If you see an IP not whitelisted error, copy the IP address shown in the message.

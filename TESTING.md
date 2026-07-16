@@ -15,9 +15,12 @@ The suite includes:
 - login page rendering tests
 - model and admin behavior tests
 - role and permission helper tests
-- Zerodha auth configuration flow tests
+- one-to-one owner constraint tests (one Zerodha account per app user)
+- Zerodha auth configuration flow tests (single-account card and AJAX add)
 - Kite callback tests
-- trade page and trade action tests
+- trade page and trade action tests (including position conversion)
+- api_key transport tests (`X-Api-Key` header / POST body)
+- Post/Redirect/Get form-submission tests
 - market data endpoint tests
 - helper and fallback branch tests
 - integration-style login and trade flow tests

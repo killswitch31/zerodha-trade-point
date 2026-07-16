@@ -3,13 +3,13 @@ Definition of forms.
 """
 
 import hashlib
-import requests
-from django import forms
-from django.conf import settings
-from django.core.cache import cache
-from django.contrib.auth.forms import AuthenticationForm
-from django.contrib.auth.models import User
-from django.utils.translation import gettext_lazy as _
+import requests # type: ignore
+from django import forms # type: ignore
+from django.conf import settings # type: ignore
+from django.core.cache import cache # type: ignore
+from django.contrib.auth.forms import AuthenticationForm # type: ignore
+from django.contrib.auth.models import User # type: ignore
+from django.utils.translation import gettext_lazy as _ # type: ignore
 from app.models import Profile
 
 class BootstrapAuthenticationForm(AuthenticationForm):

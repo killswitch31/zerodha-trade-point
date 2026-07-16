@@ -3,9 +3,9 @@ Definition of urls for zerodha_trade_point.
 """
 
 from datetime import datetime
-from django.urls import path
-from django.contrib import admin
-from django.contrib.auth.views import LoginView, LogoutView
+from django.urls import path # type: ignore
+from django.contrib import admin # type: ignore
+from django.contrib.auth.views import LoginView, LogoutView # type: ignore
 from app import forms, views
 
 

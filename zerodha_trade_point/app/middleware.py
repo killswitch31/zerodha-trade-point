@@ -1,5 +1,5 @@
-from django.shortcuts import redirect
-from django.urls import reverse
+from django.shortcuts import redirect # type: ignore
+from django.urls import reverse # type: ignore
 
 
 class LoginRequiredMiddleware:

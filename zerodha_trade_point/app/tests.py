@@ -2,16 +2,16 @@
 
 import json
 from unittest.mock import patch
-from django.contrib import admin
-from django.conf import settings
-from django.contrib.auth.models import User
-from django.core.cache import cache
-from django.db import IntegrityError, transaction
-from django.test import TestCase, RequestFactory, override_settings
-from django.urls import reverse
-from requests import RequestException
-from kiteconnect.exceptions import KiteException
-from kiteconnect.exceptions import TokenException
+from django.contrib import admin # type: ignore
+from django.conf import settings # type: ignore
+from django.contrib.auth.models import User # type: ignore
+from django.core.cache import cache # type: ignore
+from django.db import IntegrityError, transaction # type: ignore
+from django.test import TestCase, RequestFactory, override_settings # type: ignore
+from django.urls import reverse # type: ignore
+from requests import RequestException # type: ignore
+from kiteconnect.exceptions import KiteException # type: ignore
+from kiteconnect.exceptions import TokenException # type: ignore
 from app.admin import UserWithRoleAdmin
 from app.forms import AddUserForm, BootstrapAuthenticationForm, ManageZkUserForm
 from app.models import KiteUser, Profile, generate_kite_user_identifier

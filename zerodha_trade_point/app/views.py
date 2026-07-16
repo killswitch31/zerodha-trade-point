@@ -4,18 +4,18 @@ Definition of views.
 
 import time
 from datetime import datetime
-from django.shortcuts import render, redirect, get_object_or_404
-from django.http import HttpRequest, JsonResponse
-from django.urls import reverse
-from django.utils import timezone
-from django.utils.http import urlencode
-from django.template.loader import render_to_string
-from django.views.decorators.http import require_POST
-from django.contrib.auth.decorators import login_required, user_passes_test
-from django.contrib.auth.models import User
-from django.conf import settings
-from kiteconnect import KiteConnect
-from kiteconnect.exceptions import KiteException, TokenException
+from django.shortcuts import render, redirect, get_object_or_404 # type: ignore
+from django.http import HttpRequest, JsonResponse # type: ignore
+from django.urls import reverse # type: ignore
+from django.utils import timezone # type: ignore
+from django.utils.http import urlencode # type: ignore
+from django.template.loader import render_to_string # type: ignore
+from django.views.decorators.http import require_POST # type: ignore
+from django.contrib.auth.decorators import login_required, user_passes_test # type: ignore
+from django.contrib.auth.models import User # type: ignore
+from django.conf import settings # type: ignore
+from kiteconnect import KiteConnect # type: ignore
+from kiteconnect.exceptions import KiteException, TokenException # type: ignore
 from app.forms import AddUserForm, ConfigureKiteForm, ManageZkUserForm, EditAppUserForm, EditKiteCredentialsForm
 from app.models import KiteUser, Profile
 

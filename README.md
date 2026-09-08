@@ -1,6 +1,6 @@
 # Zerodha-Trade-Point
 
-> Disclaimer:
+> **Disclaimer**:
 > This project is intended only for managing your own Zerodha account and accounts of your close family members. Do not use this application to manage Zerodha accounts belonging to unrelated individuals or third parties.
 > This project does not support algorithmic trading or automated order execution.
 
